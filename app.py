@@ -78,7 +78,7 @@ if 'msb_count' not in st.session_state:
 if 'total_sub_count' not in st.session_state:
     st.session_state.total_sub_count = 0
 
-# --- NEW: Trunking categories ---
+# --- Trunking categories (now with custom naming) ---
 if 'trunking_categories' not in st.session_state:
     st.session_state.trunking_categories = {
         "Normal Power": {"zones": [], "spare_pct": 20},
@@ -86,7 +86,7 @@ if 'trunking_categories' not in st.session_state:
         "Lighting": {"zones": [], "spare_pct": 20}
     }
 
-# --- NEW: Panel dimensions (user definable) ---
+# --- Panel dimensions (user definable) ---
 if 'panel_dims' not in st.session_state:
     st.session_state.panel_dims = {
         "msb_width": 1.2,   # meters
@@ -205,6 +205,29 @@ def recommend_trunking(total_cable_area_mm2, spare_pct=20):
             return f"{w} x {h} mm", w*h, required_area, fill_factor
     return ">300x150 mm (custom)", None, required_area, fill_factor
 
+def suggest_panel_dims(panel_req, total_circuits, total_load_kva):
+    """Recommend panel dimensions based on industrial standards."""
+    # MSB: width based on total load kVA (0.8m base + 0.2m per 500kVA, max 2.5m)
+    msb_width = min(2.5, 0.8 + 0.2 * (total_load_kva / 500))
+    msb_depth = 0.8  # fixed depth for MSB
+    
+    # DB: width based on total circuits (0.4m base + 0.1m per 12 circuits, max 1.0m)
+    db_width = min(1.0, 0.4 + 0.1 * (total_circuits / 12))
+    db_depth = 0.25  # typical depth for DB
+    
+    # Sub‑board: width based on number of sub-boards (0.5m base + 0.1m per sub-board, max 1.0m)
+    sub_width = min(1.0, 0.5 + 0.1 * (panel_req['sub'] * 0.5))
+    sub_depth = 0.35  # typical depth for sub-board
+    
+    return {
+        "msb_width": round(msb_width, 2),
+        "msb_depth": msb_depth,
+        "db_width": round(db_width, 2),
+        "db_depth": db_depth,
+        "sub_width": round(sub_width, 2),
+        "sub_depth": sub_depth,
+    }
+
 def generate_pdf(project_df, panel_req, room_check, metadata, trunking_recs, panel_dims):
     pdf = FPDF()
     pdf.add_page()
@@ -295,10 +318,13 @@ def suggest_sub():
     else:
         st.session_state.total_sub_count = 0
 
-# --- Trunking category management ---
-def add_trunking_category():
-    new_name = f"Category {len(st.session_state.trunking_categories)+1}"
-    st.session_state.trunking_categories[new_name] = {"zones": [], "spare_pct": 20}
+# --- Trunking category management with custom naming ---
+def add_trunking_category(custom_name):
+    """Add a new trunking category with user-defined name."""
+    if custom_name and custom_name not in st.session_state.trunking_categories:
+        st.session_state.trunking_categories[custom_name] = {"zones": [], "spare_pct": 20}
+        return True
+    return False
 
 def delete_trunking_category(cat_name):
     if cat_name in st.session_state.trunking_categories and len(st.session_state.trunking_categories) > 1:
@@ -307,6 +333,16 @@ def delete_trunking_category(cat_name):
         for zone in st.session_state.project:
             if zone.get("trunking_category") == cat_name:
                 zone["trunking_category"] = first_cat
+
+# --- Panel dimension suggestion callback ---
+def apply_suggested_panel_dims():
+    if st.session_state.project:
+        df = pd.DataFrame(st.session_state.project)
+        total_circuits = df["num_circuits"].sum()
+        total_load_kva = df["total_power_kw"].sum() / PF
+        panel_req = estimate_panels(df, st.session_state.msb_count, st.session_state.total_sub_count)
+        suggested = suggest_panel_dims(panel_req, total_circuits, total_load_kva)
+        st.session_state.panel_dims.update(suggested)
 
 # --- 4. SIDEBAR: PROJECT METADATA & SITE PARAMETERS ---
 with st.sidebar:
@@ -352,9 +388,13 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- NEW: Panel Dimensions (Customisable) ---
+    # --- Panel Dimensions (Customisable + Suggestion) ---
     st.header("🔲 Panel Dimensions (m)")
     with st.expander("📐 Customise panel sizes", expanded=True):
+        # Button to auto-suggest dimensions
+        if st.button("💡 Suggest Sizes", key="suggest_panel_dims_btn", on_click=apply_suggested_panel_dims):
+            pass
+        
         st.markdown("**Main Switchboard (per unit)**")
         col_p1, col_p2 = st.columns(2)
         with col_p1:
@@ -390,7 +430,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- Trunking Category Management ---
+    # --- Trunking Category Management (with custom naming) ---
     st.header("📦 Trunking Categories")
     st.caption("Define separate trunking runs for different services.")
     
@@ -414,9 +454,17 @@ with st.sidebar:
         delete_trunking_category(cat_name)
         st.rerun()
     
+    # Custom category addition with name input
+    new_cat_name = st.text_input("New category name", key="new_cat_name", placeholder="e.g. UPS, Fire Alarm")
     if st.button("➕ Add Category", key="add_category_btn"):
-        add_trunking_category()
-        st.rerun()
+        if new_cat_name:
+            if add_trunking_category(new_cat_name):
+                st.success(f"Added category '{new_cat_name}'")
+                st.rerun()
+            else:
+                st.error("Category name already exists or invalid.")
+        else:
+            st.warning("Please enter a category name.")
     
     st.markdown("---")
     
@@ -681,7 +729,6 @@ with st.sidebar:
         st.session_state.fixture_list = []
         st.session_state.total_sub_count = 0
         st.session_state.msb_count = 1
-        # Reset trunking category zone lists
         for cat in st.session_state.trunking_categories:
             st.session_state.trunking_categories[cat]["zones"] = []
         st.rerun()
@@ -848,13 +895,12 @@ if st.session_state.project:
         st.checkbox("Functional Testing of All Circuits", key="tc7")
         st.checkbox("Labelling & As‑built Drawings", key="tc8")
 
-# --- 7. PANEL SCHEDULER & SPACE PLANNER (with user-defined dimensions) ---
+# --- 7. PANEL SCHEDULER & SPACE PLANNER ---
 st.header("🔌 Panel Scheduler & Space Planner")
 
 if not st.session_state.project:
     st.info("Add at least one area to enable panel planning.")
 else:
-    # Use user-defined panel dimensions from session state
     dims = st.session_state.panel_dims
     
     room_len = st.number_input("Room length (m)", min_value=0.5, value=5.0, step=0.5, key="room_len")
@@ -865,7 +911,7 @@ else:
                    panel_req["sub"] * dims["sub_width"])
     
     max_depth = max(dims["msb_depth"], dims["db_depth"], dims["sub_depth"])
-    required_depth = max_depth + 0.8  # 800mm clearance
+    required_depth = max_depth + 0.8
     width_ok = room_len >= total_width
     depth_ok = room_wid >= required_depth
 
