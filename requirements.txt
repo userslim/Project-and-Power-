@@ -1,6 +1,2 @@
 streamlit
 pandas
-matplotlib
-numpy
-os
-fpdf2
