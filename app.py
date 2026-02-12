@@ -274,17 +274,17 @@ def suggest_sub():
 # --- 4. SIDEBAR: PROJECT METADATA & SITE PARAMETERS ---
 with st.sidebar:
     st.header("📁 Project Information")
-    proj_name = st.text_input("Project Name", value=st.session_state.project_metadata['project_name'])
-    proj_number = st.text_input("Project Number", value=st.session_state.project_metadata['project_number'])
-    creator = st.text_input("Created by", value=st.session_state.project_metadata['creator'])
-    proj_date = st.date_input("Date", value=datetime.strptime(st.session_state.project_metadata['date'], "%Y-%m-%d"))
+    proj_name = st.text_input("Project Name", value=st.session_state.project_metadata['project_name'], key="proj_name")
+    proj_number = st.text_input("Project Number", value=st.session_state.project_metadata['project_number'], key="proj_number")
+    creator = st.text_input("Created by", value=st.session_state.project_metadata['creator'], key="creator")
+    proj_date = st.date_input("Date", value=datetime.strptime(st.session_state.project_metadata['date'], "%Y-%m-%d"), key="proj_date")
     
     # MSB count with suggestion
     col_msb1, col_msb2 = st.columns([3, 1])
     with col_msb1:
         msb_count = st.number_input("Number of Main Switchboards (MSB)", 
                                     min_value=1, max_value=10, 
-                                    value=st.session_state.msb_count, step=1)
+                                    value=st.session_state.msb_count, step=1, key="msb_count_input")
     with col_msb2:
         st.write("")
         st.write("")
@@ -298,7 +298,7 @@ with st.sidebar:
         total_sub_count = st.number_input("Total Sub‑boards (optional)", 
                                           min_value=0, max_value=50, 
                                           value=st.session_state.total_sub_count, step=1,
-                                          help="Leave 0 to auto‑compute from zones >50kW")
+                                          help="Leave 0 to auto‑compute from zones >50kW", key="sub_count_input")
     with col_sub2:
         st.write("")
         st.write("")
@@ -315,24 +315,24 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("🏢 Site Parameters")
-    z_name = st.text_input("Area Description", "Level 1")
-    z_type = st.selectbox("Building Type", list(TECH_REFS.keys()))
+    z_name = st.text_input("Area Description", "Level 1", key="z_name")
+    z_type = st.selectbox("Building Type", list(TECH_REFS.keys()), key="z_type")
     
     if z_type in ["Lift (Passenger)", "Escalator"]:
-        equipment_power = st.number_input("Equipment Power (kW)", min_value=0.0, value=15.0, step=1.0)
+        equipment_power = st.number_input("Equipment Power (kW)", min_value=0.0, value=15.0, step=1.0, key="equipment_power")
         z_area = 0.0
         st.info("Lifts and escalators are fixed loads.")
     else:
-        z_area = st.number_input("Floor Area (m²)", min_value=0.0, value=100.0, step=10.0)
+        z_area = st.number_input("Floor Area (m²)", min_value=0.0, value=100.0, step=10.0, key="z_area")
         equipment_power = None
     
-    z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0, step=1.0)
+    z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0, step=1.0, key="z_dist")
     
     if z_type not in ["Lift (Passenger)", "Escalator"]:
         suggested_db = math.ceil(z_area / TECH_REFS[z_type][6]) if TECH_REFS[z_type][6] > 0 else 1
         z_db = st.number_input("Number of Sub‑boards (DBs) for this zone", 
                                min_value=1, value=suggested_db, step=1,
-                               help="You can override the suggested value.")
+                               help="You can override the suggested value.", key="z_db")
     else:
         z_db = 1
     
@@ -340,11 +340,11 @@ with st.sidebar:
     light_method = st.radio(
         "Lighting Calculation Method",
         ["Load-based (W/m²)", "Lux-based (lumens)"],
-        index=0
+        index=0, key="light_method"
     )
     
     st.subheader("💡 Lighting Fixture Types")
-    use_custom_fixtures = st.checkbox("Use multiple fixture types")
+    use_custom_fixtures = st.checkbox("Use multiple fixture types", key="use_custom_fixtures")
     
     if use_custom_fixtures:
         if st.session_state.fixture_list:
@@ -368,12 +368,12 @@ with st.sidebar:
         with col_q:
             new_qty = st.number_input("Qty", min_value=1, value=1, step=1, key="new_fix_q")
         with col_a:
-            if st.button("➕ Add"):
+            if st.button("➕ Add", key="add_fixture_btn"):
                 add_fixture(new_watt, new_qty)
                 st.rerun()
         light_wattage_single = 15
     else:
-        light_wattage_single = st.number_input("Light Fixture Wattage (W)", min_value=1, value=15, step=1)
+        light_wattage_single = st.number_input("Light Fixture Wattage (W)", min_value=1, value=15, step=1, key="light_wattage_single")
         if st.session_state.fixture_list:
             st.session_state.fixture_list = []
     
@@ -381,21 +381,21 @@ with st.sidebar:
     lux_params = {}
     if not use_custom_fixtures:
         if light_method == "Load-based (W/m²)":
-            override_light = st.checkbox("Override lighting power density (W/m²)")
+            override_light = st.checkbox("Override lighting power density (W/m²)", key="override_light")
             if override_light:
-                override_light_w_m2 = st.number_input("Custom Light W/m²", min_value=0.0, value=10.0, step=1.0)
+                override_light_w_m2 = st.number_input("Custom Light W/m²", min_value=0.0, value=10.0, step=1.0, key="custom_light_w_m2")
         else:
             tech_lux = TECH_REFS[z_type][2] if z_type in TECH_REFS else 300
-            lux_val = st.number_input("Target illuminance (lux)", min_value=50, value=tech_lux, step=50)
-            lumens = st.number_input("Lumens per fixture", min_value=500, value=3200, step=100)
-            mf = st.slider("Maintenance Factor", 0.5, 1.0, 0.8, 0.05)
-            uf = st.slider("Utilization Factor", 0.3, 1.0, 0.7, 0.05)
+            lux_val = st.number_input("Target illuminance (lux)", min_value=50, value=tech_lux, step=50, key="lux_val")
+            lumens = st.number_input("Lumens per fixture", min_value=500, value=3200, step=100, key="lumens")
+            mf = st.slider("Maintenance Factor", 0.5, 1.0, 0.8, 0.05, key="mf")
+            uf = st.slider("Utilization Factor", 0.3, 1.0, 0.7, 0.05, key="uf")
             lux_params = {"lux": lux_val, "lumens_per_fixture": lumens, "mf": mf, "uf": uf}
     
     # MSCP EV
     ev_load_kw = 0
     if z_type == "MSCP (Carpark)":
-        lots = st.number_input("Number of parking lots", min_value=1, value=20, step=1)
+        lots = st.number_input("Number of parking lots", min_value=1, value=20, step=1, key="lots")
         ev_load_kw = (lots * 7.4) * 0.20 * 1.20
         st.info(f"EV charging reserve: {ev_load_kw:.1f} kW")
     
@@ -408,7 +408,7 @@ with st.sidebar:
     st.markdown("---")
     
     # --- MAIN ADD BUTTON ---
-    if st.button("➕ Add to Project", use_container_width=True):
+    if st.button("➕ Add to Project", use_container_width=True, key="add_project_btn"):
         tech_data = TECH_REFS[z_type]
         
         if z_type in ["Lift (Passenger)", "Escalator"]:
@@ -427,7 +427,6 @@ with st.sidebar:
             }
             light_w_m2_used = 0
             num_lights = 0
-            # total_apparent_kva = calc["total_apparent_kva"]   # optional
         else:
             calc = calculate_zone(
                 area=z_area,
@@ -442,7 +441,6 @@ with st.sidebar:
             light_w_m2_used = calc["light_w_m2"]
             num_lights = calc["num_lights"]
             total_power_kw = calc["total_power_kw"]
-            total_apparent_kva = calc["total_apparent_kva"]
         
         # Auto‑select breaker rating & type based on current with PF=0.8
         if total_power_kw > 5:
@@ -462,7 +460,7 @@ with st.sidebar:
             "power_w_m2": calc["power_w_m2"] if z_type not in ["Lift", "Escalator"] else 0,
             "light_w_m2": light_w_m2_used,
             "total_power_kw": round(total_power_kw, 2),
-            "total_apparent_kva": round(calc["total_apparent_kva"], 2),   # ✅ FIXED
+            "total_apparent_kva": round(calc["total_apparent_kva"], 2),
             "sockets": calc["num_sockets"],
             "isolator": calc["isolator"],
             "breaker_rating": auto_rating,
@@ -514,7 +512,7 @@ with st.sidebar:
             esc_power = st.number_input("Escalator Power (kW)", min_value=0.0, value=22.0, step=1.0, key="esc_power_side")
             esc_qty = st.number_input("Quantity", min_value=0, value=1, step=1, key="esc_qty_side")
         
-        if st.button("➕ Add Fixed Equipment", use_container_width=True):
+        if st.button("➕ Add Fixed Equipment", use_container_width=True, key="add_fixed_btn"):
             for i in range(lift_qty):
                 desc = f"Lift {st.session_state.eq_counter['lift']}"
                 st.session_state.eq_counter['lift'] += 1
@@ -552,7 +550,7 @@ with st.sidebar:
             st.success(f"Added {lift_qty} lift(s) and {esc_qty} escalator(s)")
     
     st.markdown("---")
-    if st.button("🧹 Clear Project", use_container_width=True):
+    if st.button("🧹 Clear Project", use_container_width=True, key="clear_project_btn"):
         st.session_state.project = []
         st.session_state.eq_counter = {'lift': 1, 'esc': 1}
         st.session_state.fixture_list = []
@@ -711,15 +709,15 @@ if st.session_state.project:
     st.subheader("🔍 Testing & Commissioning Checklist")
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-        st.checkbox("Visual Inspection (Cabling & Terminations)")
-        st.checkbox("Continuity of Protective Conductors")
-        st.checkbox("Insulation Resistance Test (>1 MΩ)")
-        st.checkbox("Polarity Test")
+        st.checkbox("Visual Inspection (Cabling & Terminations)", key="tc1")
+        st.checkbox("Continuity of Protective Conductors", key="tc2")
+        st.checkbox("Insulation Resistance Test (>1 MΩ)", key="tc3")
+        st.checkbox("Polarity Test", key="tc4")
     with col_t2:
-        st.checkbox("Earth Fault Loop Impedance (EFLI)")
-        st.checkbox("RCD Operation Test")
-        st.checkbox("Functional Testing of All Circuits")
-        st.checkbox("Labelling & As‑built Drawings")
+        st.checkbox("Earth Fault Loop Impedance (EFLI)", key="tc5")
+        st.checkbox("RCD Operation Test", key="tc6")
+        st.checkbox("Functional Testing of All Circuits", key="tc7")
+        st.checkbox("Labelling & As‑built Drawings", key="tc8")
 
 # --- 7. PANEL SCHEDULER & SPACE PLANNER ---
 st.header("🔌 Panel Scheduler & Space Planner")
@@ -781,8 +779,8 @@ if st.session_state.project and not df.empty:
     with col_t2:
         st.success(f"**Recommended trunking:** {rec_text}")
         st.markdown("**Custom trunking check**")
-        cust_w = st.number_input("Width (mm)", min_value=50, value=100, step=10)
-        cust_h = st.number_input("Height (mm)", min_value=50, value=50, step=10)
+        cust_w = st.number_input("Width (mm)", min_value=50, value=100, step=10, key="cust_w")
+        cust_h = st.number_input("Height (mm)", min_value=50, value=50, step=10, key="cust_h")
         cust_area = cust_w * cust_h
         fill_pct = (total_cable_area / cust_area) * 100 if cust_area > 0 else 0
         st.write(f"Fill ratio: {fill_pct:.1f}% (max {fill_factor*100:.1f}%)")
@@ -799,11 +797,11 @@ st.header("⚡ Cable Sizing Tool")
 st.markdown("Auto‑size a cable based on load current, length and voltage drop (4% max).")
 col_i1, col_i2, col_i3 = st.columns(3)
 with col_i1:
-    current = st.number_input("Load current (A)", min_value=1.0, value=20.0, step=1.0)
+    current = st.number_input("Load current (A)", min_value=1.0, value=20.0, step=1.0, key="cable_current")
 with col_i2:
-    length = st.number_input("Cable length (m)", min_value=1.0, value=30.0, step=1.0)
+    length = st.number_input("Cable length (m)", min_value=1.0, value=30.0, step=1.0, key="cable_length")
 with col_i3:
-    voltage = st.selectbox("System voltage", [230, 400], index=0)
+    voltage = st.selectbox("System voltage", [230, 400], index=0, key="cable_voltage")
 
 phase = 1 if voltage == 230 else 3
 auto_size = auto_cable_size(current, length, voltage, phase)
@@ -811,7 +809,8 @@ st.info(f"✅ **Recommended cable (auto):** {auto_size}")
 
 manual_size = st.selectbox("Manual override (select cable size)", 
                            options=list(CABLE_CURRENT.keys()) + [">50mm² (custom)"],
-                           index=list(CABLE_CURRENT.keys()).index(auto_size) if auto_size in CABLE_CURRENT else 0)
+                           index=list(CABLE_CURRENT.keys()).index(auto_size) if auto_size in CABLE_CURRENT else 0,
+                           key="cable_manual_size")
 if manual_size != auto_size:
     st.warning(f"Manual selection: {manual_size} (auto would be {auto_size})")
 
@@ -820,22 +819,26 @@ st.header("🔌 Breaker Selection Tool")
 st.markdown("Auto‑select breaker rating & type based on load current.")
 col_b1, col_b2 = st.columns(2)
 with col_b1:
-    test_current = st.number_input("Test load current (A)", min_value=1.0, value=30.0, step=1.0, key="test_current")
+    test_current = st.number_input("Test load current (A)", min_value=1.0, value=30.0, step=1.0, key="breaker_test_current")
 with col_b2:
-    test_phase = st.selectbox("Phase", [1, 3], index=1, format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase")
+    test_phase = st.selectbox("Phase", [1, 3], index=1, 
+                              format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase",
+                              key="breaker_phase")
 auto_rating, auto_type = auto_breaker_selection(test_current, test_phase)
 st.info(f"✅ **Recommended breaker:** {auto_rating}A {auto_type}")
 
-# Add a simple kW→A converter with PF=0.8
+# --- QUICK kW → A CONVERTER (PF = 0.8) ---
 st.markdown("---")
 st.subheader("📐 Quick kW → A Converter (PF = 0.8)")
 col_conv1, col_conv2, col_conv3 = st.columns(3)
 with col_conv1:
-    kw_input = st.number_input("Power (kW)", min_value=0.0, value=10.0, step=1.0)
+    kw_input = st.number_input("Power (kW)", min_value=0.0, value=10.0, step=1.0, key="conv_kw")
 with col_conv2:
-    volt_input = st.selectbox("Voltage", [230, 400], index=1)
+    volt_input = st.selectbox("Voltage", [230, 400], index=1, key="conv_voltage")
 with col_conv3:
-    phase_input = st.selectbox("Phase", [1, 3], index=1, format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase")
+    phase_input = st.selectbox("Phase", [1, 3], index=1,
+                               format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase",
+                               key="conv_phase")
 if phase_input == 1:
     current_output = (kw_input * 1000) / (volt_input * PF)
 else:
@@ -846,17 +849,17 @@ st.info(f"⚡ **Current:** {current_output:.1f} A")
 st.header("📤 Export Project Data")
 col_e1, col_e2 = st.columns(2)
 with col_e1:
-    if st.button("📥 Download CSV"):
+    if st.button("📥 Download CSV", key="csv_btn"):
         if not df.empty:
             export_df = df[display_cols].copy()
             csv = export_df.to_csv(index=False).encode('utf-8')
-            st.download_button("Confirm Download", data=csv, file_name="electrical_project.csv", mime="text/csv")
+            st.download_button("Confirm Download", data=csv, file_name="electrical_project.csv", mime="text/csv", key="download_csv")
         else:
             st.warning("No data to export.")
 with col_e2:
-    if st.button("📄 Generate PDF Report"):
+    if st.button("📄 Generate PDF Report", key="pdf_btn"):
         if not df.empty and 'room_len' in st.session_state:
             pdf_bytes = generate_pdf(df, panel_req, room_check, st.session_state.project_metadata, trunking_rec)
-            st.download_button("Confirm Download PDF", data=pdf_bytes, file_name="electrical_report.pdf", mime="application/pdf")
+            st.download_button("Confirm Download PDF", data=pdf_bytes, file_name="electrical_report.pdf", mime="application/pdf", key="download_pdf")
         else:
             st.warning("Add project data and define room dimensions first.")
