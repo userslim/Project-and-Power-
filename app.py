@@ -427,6 +427,7 @@ with st.sidebar:
             }
             light_w_m2_used = 0
             num_lights = 0
+            # total_apparent_kva = calc["total_apparent_kva"]   # optional
         else:
             calc = calculate_zone(
                 area=z_area,
@@ -461,7 +462,7 @@ with st.sidebar:
             "power_w_m2": calc["power_w_m2"] if z_type not in ["Lift", "Escalator"] else 0,
             "light_w_m2": light_w_m2_used,
             "total_power_kw": round(total_power_kw, 2),
-            "total_apparent_kva": round(total_apparent_kva, 2),
+            "total_apparent_kva": round(calc["total_apparent_kva"], 2),   # ✅ FIXED
             "sockets": calc["num_sockets"],
             "isolator": calc["isolator"],
             "breaker_rating": auto_rating,
