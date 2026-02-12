@@ -80,11 +80,21 @@ if 'total_sub_count' not in st.session_state:
 
 # --- NEW: Trunking categories ---
 if 'trunking_categories' not in st.session_state:
-    # Default categories
     st.session_state.trunking_categories = {
         "Normal Power": {"zones": [], "spare_pct": 20},
         "Emergency Power": {"zones": [], "spare_pct": 20},
         "Lighting": {"zones": [], "spare_pct": 20}
+    }
+
+# --- NEW: Panel dimensions (user definable) ---
+if 'panel_dims' not in st.session_state:
+    st.session_state.panel_dims = {
+        "msb_width": 1.2,   # meters
+        "msb_depth": 0.6,
+        "db_width": 0.6,
+        "db_depth": 0.2,
+        "sub_width": 0.8,
+        "sub_depth": 0.3,
     }
 
 # --- 3. HELPER FUNCTIONS ---
@@ -195,7 +205,7 @@ def recommend_trunking(total_cable_area_mm2, spare_pct=20):
             return f"{w} x {h} mm", w*h, required_area, fill_factor
     return ">300x150 mm (custom)", None, required_area, fill_factor
 
-def generate_pdf(project_df, panel_req, room_check, metadata, trunking_recs):
+def generate_pdf(project_df, panel_req, room_check, metadata, trunking_recs, panel_dims):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
@@ -246,9 +256,9 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_recs):
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 10, "Panel Schedule & Space Planning", ln=True)
     pdf.set_font("Arial", "", 10)
-    pdf.cell(0, 8, f"Main Switchboard: {panel_req['msb']}", ln=True)
-    pdf.cell(0, 8, f"Distribution Boards (total): {panel_req['db']}", ln=True)
-    pdf.cell(0, 8, f"Sub-boards: {panel_req['sub']}", ln=True)
+    pdf.cell(0, 8, f"Main Switchboard: {panel_req['msb']} unit(s) @ {panel_dims['msb_width']}m x {panel_dims['msb_depth']}m each", ln=True)
+    pdf.cell(0, 8, f"Distribution Boards (total): {panel_req['db']} @ {panel_dims['db_width']}m x {panel_dims['db_depth']}m each", ln=True)
+    pdf.cell(0, 8, f"Sub-boards: {panel_req['sub']} @ {panel_dims['sub_width']}m x {panel_dims['sub_depth']}m each", ln=True)
     pdf.ln(5)
     pdf.cell(0, 8, f"Electrical Room: {room_check['length']}m x {room_check['width']}m", ln=True)
     pdf.cell(0, 8, f"800mm clearance check: {room_check['status']}", ln=True)
@@ -285,7 +295,7 @@ def suggest_sub():
     else:
         st.session_state.total_sub_count = 0
 
-# --- NEW: Trunking category management functions ---
+# --- Trunking category management ---
 def add_trunking_category():
     new_name = f"Category {len(st.session_state.trunking_categories)+1}"
     st.session_state.trunking_categories[new_name] = {"zones": [], "spare_pct": 20}
@@ -293,19 +303,10 @@ def add_trunking_category():
 def delete_trunking_category(cat_name):
     if cat_name in st.session_state.trunking_categories and len(st.session_state.trunking_categories) > 1:
         del st.session_state.trunking_categories[cat_name]
-        # Update zones that were assigned to this category - set to first available category
         first_cat = list(st.session_state.trunking_categories.keys())[0]
         for zone in st.session_state.project:
             if zone.get("trunking_category") == cat_name:
                 zone["trunking_category"] = first_cat
-        # Also remove from category zone lists
-        for zone in st.session_state.project:
-            if zone.get("trunking_category") == cat_name:
-                zone["trunking_category"] = first_cat
-
-def update_zone_category(zone_index, new_category):
-    if 0 <= zone_index < len(st.session_state.project):
-        st.session_state.project[zone_index]["trunking_category"] = new_category
 
 # --- 4. SIDEBAR: PROJECT METADATA & SITE PARAMETERS ---
 with st.sidebar:
@@ -351,11 +352,48 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # --- NEW: Trunking Category Management ---
+    # --- NEW: Panel Dimensions (Customisable) ---
+    st.header("🔲 Panel Dimensions (m)")
+    with st.expander("📐 Customise panel sizes", expanded=True):
+        st.markdown("**Main Switchboard (per unit)**")
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            msb_width = st.number_input("Width (m)", min_value=0.1, max_value=3.0, 
+                                        value=st.session_state.panel_dims["msb_width"], step=0.1, key="msb_width")
+        with col_p2:
+            msb_depth = st.number_input("Depth (m)", min_value=0.1, max_value=2.0,
+                                        value=st.session_state.panel_dims["msb_depth"], step=0.1, key="msb_depth")
+        st.session_state.panel_dims["msb_width"] = msb_width
+        st.session_state.panel_dims["msb_depth"] = msb_depth
+        
+        st.markdown("**Distribution Board (DB)**")
+        col_p3, col_p4 = st.columns(2)
+        with col_p3:
+            db_width = st.number_input("Width (m)", min_value=0.1, max_value=1.5,
+                                       value=st.session_state.panel_dims["db_width"], step=0.1, key="db_width")
+        with col_p4:
+            db_depth = st.number_input("Depth (m)", min_value=0.1, max_value=1.0,
+                                       value=st.session_state.panel_dims["db_depth"], step=0.1, key="db_depth")
+        st.session_state.panel_dims["db_width"] = db_width
+        st.session_state.panel_dims["db_depth"] = db_depth
+        
+        st.markdown("**Sub‑board**")
+        col_p5, col_p6 = st.columns(2)
+        with col_p5:
+            sub_width = st.number_input("Width (m)", min_value=0.1, max_value=2.0,
+                                        value=st.session_state.panel_dims["sub_width"], step=0.1, key="sub_width")
+        with col_p6:
+            sub_depth = st.number_input("Depth (m)", min_value=0.1, max_value=1.5,
+                                        value=st.session_state.panel_dims["sub_depth"], step=0.1, key="sub_depth")
+        st.session_state.panel_dims["sub_width"] = sub_width
+        st.session_state.panel_dims["sub_depth"] = sub_depth
+    
+    st.markdown("---")
+    
+    # --- Trunking Category Management ---
     st.header("📦 Trunking Categories")
     st.caption("Define separate trunking runs for different services.")
     
-    # Display existing categories with spare % adjustment
     cats_to_delete = []
     for cat_name, cat_data in st.session_state.trunking_categories.items():
         col_c1, col_c2, col_c3 = st.columns([3, 1, 1])
@@ -404,7 +442,7 @@ with st.sidebar:
     else:
         z_db = 1
     
-    # --- Trunking category assignment for this zone ---
+    # Trunking category assignment for this zone
     category_options = list(st.session_state.trunking_categories.keys())
     default_cat = category_options[0] if category_options else "Unassigned"
     trunking_cat = st.selectbox("Trunking Category", category_options, index=0, key="trunking_cat")
@@ -541,11 +579,10 @@ with st.sidebar:
             "num_circuits": calc["num_circuits"],
             "distance_m": z_dist,
             "db_count": z_db,
-            "trunking_category": trunking_cat,  # Store category
+            "trunking_category": trunking_cat,
         }
         st.session_state.project.append(zone_entry)
         
-        # Also add to category zone list (for quick lookup)
         if trunking_cat in st.session_state.trunking_categories:
             st.session_state.trunking_categories[trunking_cat]["zones"].append(len(st.session_state.project)-1)
         
@@ -571,7 +608,7 @@ with st.sidebar:
                 "num_circuits": math.ceil(ev_load_kw / 7.4),
                 "distance_m": z_dist,
                 "db_count": 1,
-                "trunking_category": trunking_cat,  # Assign same category
+                "trunking_category": trunking_cat,
             }
             st.session_state.project.append(ev_entry)
             if trunking_cat in st.session_state.trunking_categories:
@@ -590,7 +627,6 @@ with st.sidebar:
             esc_power = st.number_input("Escalator Power (kW)", min_value=0.0, value=22.0, step=1.0, key="esc_power_side")
             esc_qty = st.number_input("Quantity", min_value=0, value=1, step=1, key="esc_qty_side")
         
-        # Category assignment for fixed equipment
         fixed_cat = st.selectbox("Trunking Category for these units", 
                                  list(st.session_state.trunking_categories.keys()), 
                                  key="fixed_cat")
@@ -812,44 +848,45 @@ if st.session_state.project:
         st.checkbox("Functional Testing of All Circuits", key="tc7")
         st.checkbox("Labelling & As‑built Drawings", key="tc8")
 
-# --- 7. PANEL SCHEDULER & SPACE PLANNER ---
+# --- 7. PANEL SCHEDULER & SPACE PLANNER (with user-defined dimensions) ---
 st.header("🔌 Panel Scheduler & Space Planner")
 
 if not st.session_state.project:
     st.info("Add at least one area to enable panel planning.")
 else:
-    PANEL_DIMS = {"msb": (1.2, 0.6), "db": (0.6, 0.2), "sub": (0.8, 0.3)}
+    # Use user-defined panel dimensions from session state
+    dims = st.session_state.panel_dims
+    
     room_len = st.number_input("Room length (m)", min_value=0.5, value=5.0, step=0.5, key="room_len")
     room_wid = st.number_input("Room width (m)",  min_value=0.5, value=3.0, step=0.5, key="room_wid")
 
-    total_width = (panel_req["msb"] * PANEL_DIMS["msb"][0] +
-                   panel_req["db"]  * PANEL_DIMS["db"][0] +
-                   panel_req["sub"] * PANEL_DIMS["sub"][0])
-    max_depth = max(PANEL_DIMS["msb"][1], PANEL_DIMS["db"][1], PANEL_DIMS["sub"][1])
-    required_depth = max_depth + 0.8
+    total_width = (panel_req["msb"] * dims["msb_width"] +
+                   panel_req["db"]  * dims["db_width"] +
+                   panel_req["sub"] * dims["sub_width"])
+    
+    max_depth = max(dims["msb_depth"], dims["db_depth"], dims["sub_depth"])
+    required_depth = max_depth + 0.8  # 800mm clearance
     width_ok = room_len >= total_width
     depth_ok = room_wid >= required_depth
 
     col1, col2 = st.columns(2)
     with col1:
         st.info(f"📏 **Total panel width:** {total_width:.2f} m")
-        st.info(f"📐 **Required room depth:** {required_depth:.2f} m")
+        st.info(f"📐 **Required room depth:** {required_depth:.2f} m (panel depth {max_depth:.2f}m + 0.8m clearance)")
     with col2:
         if width_ok and depth_ok:
             st.success("✅ Room dimensions satisfy 800 mm clearance.")
         else:
-            st.error("❌ Room too small. Adjust dimensions.")
+            st.error("❌ Room too small. Adjust dimensions or panel counts.")
     room_check = {"length": room_len, "width": room_wid, "status": "OK" if width_ok and depth_ok else "FAIL"}
 
-# --- 8. CABLE TRUNKING / LADDER SIZING BY SERVICE (NEW) ---
+# --- 8. CABLE TRUNKING / LADDER SIZING BY SERVICE ---
 st.header("📦 Cable Trunking / Ladder Sizing by Service")
 
 if st.session_state.project and not df.empty:
-    # Prepare per-category calculations
     category_recommendations = {}
     
     for cat_name, cat_data in st.session_state.trunking_categories.items():
-        # Get all zones assigned to this category
         cat_df = df[df["trunking_category"] == cat_name]
         if cat_df.empty:
             continue
@@ -874,7 +911,6 @@ if st.session_state.project and not df.empty:
             "zone_count": len(cat_df)
         }
     
-    # Display recommendations per category
     if category_recommendations:
         for cat_name, rec in category_recommendations.items():
             with st.expander(f"📁 {cat_name} ({rec['zone_count']} zones)", expanded=True):
@@ -886,8 +922,6 @@ if st.session_state.project and not df.empty:
                     st.metric("Required trunking area", f"{rec['required_area']:.0f} mm²")
                 with col_c2:
                     st.success(f"**Recommended trunking:** {rec['recommendation']}")
-                    # Custom check
-                    st.markdown("**Custom trunking check**")
                     cust_w = st.number_input(f"Width (mm)", min_value=50, value=100, step=10, key=f"cust_w_{cat_name}")
                     cust_h = st.number_input(f"Height (mm)", min_value=50, value=50, step=10, key=f"cust_h_{cat_name}")
                     cust_area = cust_w * cust_h
@@ -970,7 +1004,8 @@ with col_e1:
 with col_e2:
     if st.button("📄 Generate PDF Report", key="pdf_btn"):
         if not df.empty and 'room_len' in st.session_state:
-            pdf_bytes = generate_pdf(df, panel_req, room_check, st.session_state.project_metadata, category_recommendations)
+            pdf_bytes = generate_pdf(df, panel_req, room_check, st.session_state.project_metadata, 
+                                     category_recommendations, st.session_state.panel_dims)
             st.download_button("Confirm Download PDF", data=pdf_bytes, file_name="electrical_report.pdf", mime="application/pdf", key="download_pdf")
         else:
             st.warning("Add project data and define room dimensions first.")
