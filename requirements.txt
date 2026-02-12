@@ -1,2 +1,4 @@
 streamlit
 pandas
+fpdf
+openpyxl   # optional, if you later switch to Excel
