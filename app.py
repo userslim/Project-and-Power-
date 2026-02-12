@@ -22,19 +22,17 @@ TECH_REFS = {
     "MRT Station (UG)": [220, 18, 500, 50, "63A TP", "35mm² 5C", 400, 1.35],
     "MRT Station (AG)": [120, 12, 400, 50, "32A TP", "10mm² 5C", 600, 4.4],
     "MSCP (Carpark)": [15, 5, 150, 100, "32A TP", "6.0mm² 5C", 1200, 7.3],
-    # Special equipment (area‑independent)
     "Lift (Passenger)": [0, 0, 0, 0, "32A TP", "6.0mm² 5C", 0, 0],
     "Escalator": [0, 0, 0, 0, "63A TP", "16mm² 5C", 0, 0],
 }
 
-# Residential appliance list (reference)
 RES_APPLIANCES = [
     "1x Refrigerator (150W)", "1x Air Conditioner (2000W)",
     "10x LED Lights (100W total)", "1x Television (100W)",
     "1x Washing Machine (500W)", "1x Water Heater (3000W)"
 ]
 
-# Cable current carrying capacity (PVC, clipped direct)
+# Cable data
 CABLE_CURRENT = {
     "1.5mm²": 16, "2.5mm²": 22, "4.0mm²": 30, "6.0mm²": 38,
     "10mm²": 52, "16mm²": 70, "25mm²": 94, "35mm²": 115, "50mm²": 140
@@ -54,7 +52,8 @@ TRUNKING_SIZES = [
     (50, 50), (75, 50), (100, 50), (100, 75), (150, 75), (200, 100), (300, 150)
 ]
 
-# Breaker type options
+# Standard breaker ratings (IEC)
+BREAKER_RATINGS = [6, 10, 13, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250, 320, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6300]
 BREAKER_TYPES = ["MCB", "MCCB", "RCBO", "RCCB", "ACB"]
 
 # --- 2. INITIALISE SESSION STATE ---
@@ -71,6 +70,8 @@ if 'project_metadata' not in st.session_state:
     }
 if 'fixture_list' not in st.session_state:
     st.session_state.fixture_list = []
+if 'msb_count' not in st.session_state:
+    st.session_state.msb_count = 1   # default 1 MSB
 
 # --- 3. HELPER FUNCTIONS ---
 def add_fixture(wattage, qty):
@@ -134,13 +135,14 @@ def calculate_zone(area, tech_data, light_method, light_wattage_single,
         "num_circuits": num_circuits,
     }
 
-def estimate_panels(project_df):
+def estimate_panels(project_df, msb_count):
+    """Return dict with number of main switchboard, DBs and sub-boards."""
     if project_df.empty:
-        return {"msb": 1, "db": 0, "sub": 0}
+        return {"msb": msb_count, "db": 0, "sub": 0}
     total_circuits = project_df["num_circuits"].sum()
     db_count = math.ceil(total_circuits / 18)
     sub_count = (project_df["total_power_kw"] > 50).sum()
-    return {"msb": 1, "db": db_count, "sub": sub_count}
+    return {"msb": msb_count, "db": db_count, "sub": sub_count}
 
 def auto_cable_size(current, length, voltage=230, phase=1, max_vd_pct=4):
     vd_limit = voltage * max_vd_pct / 100
@@ -156,12 +158,25 @@ def auto_cable_size(current, length, voltage=230, phase=1, max_vd_pct=4):
                 suitable.append(size)
     return suitable[0] if suitable else ">50mm² (custom)"
 
-def recommend_trunking(total_cable_area_mm2):
-    required_area = total_cable_area_mm2 / 0.45
+def auto_breaker_selection(current, phase=1):
+    """Select standard breaker rating and type based on current."""
+    rating = next((r for r in BREAKER_RATINGS if r >= current), BREAKER_RATINGS[-1])
+    if rating <= 125:
+        btype = "MCB"
+    elif rating <= 800:
+        btype = "MCCB"
+    else:
+        btype = "ACB"
+    return rating, btype
+
+def recommend_trunking(total_cable_area_mm2, spare_pct=20):
+    """Recommend trunking with spare capacity."""
+    fill_factor = 0.45 * (1 - spare_pct / 100)
+    required_area = total_cable_area_mm2 / fill_factor
     for w, h in TRUNKING_SIZES:
         if w * h >= required_area:
-            return f"{w} x {h} mm", w*h, required_area
-    return ">300x150 mm (custom)", None, required_area
+            return f"{w} x {h} mm", w*h, required_area, fill_factor
+    return ">300x150 mm (custom)", None, required_area, fill_factor
 
 def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     pdf = FPDF()
@@ -183,7 +198,7 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     
     if not project_df.empty:
         cols = ["description", "type", "area_m2", "total_power_kw", "sockets",
-                "isolator", "breaker_type", "lights", "num_circuits", "db_count"]
+                "isolator", "breaker_rating", "breaker_type", "lights", "num_circuits", "db_count"]
         display_cols = [c for c in cols if c in project_df.columns]
         pdf_data = project_df[display_cols].copy()
         for _, row in pdf_data.iterrows():
@@ -194,8 +209,8 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
             if 'sockets' in row:
                 line += f"S:{row['sockets']} | "
             line += f"{row['isolator']} | "
-            if 'breaker_type' in row:
-                line += f"{row['breaker_type']} | "
+            if 'breaker_rating' in row and 'breaker_type' in row:
+                line += f"{row['breaker_rating']}A {row['breaker_type']} | "
             if 'lights' in row:
                 line += f"L:{row['lights']} | "
             if 'num_circuits' in row:
@@ -222,7 +237,9 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     pdf.cell(0, 10, "Cable Trunking Recommendation", ln=True)
     pdf.set_font("Arial", "", 10)
     pdf.cell(0, 8, f"Total cable cross‑section: {trunking_rec['total_area']:.0f} mm²", ln=True)
-    pdf.cell(0, 8, f"Required trunking area (45% fill): {trunking_rec['required_area']:.0f} mm²", ln=True)
+    pdf.cell(0, 8, f"Spare capacity: {trunking_rec['spare_pct']}%", ln=True)
+    pdf.cell(0, 8, f"Effective fill factor: {trunking_rec['fill_factor']*100:.1f}%", ln=True)
+    pdf.cell(0, 8, f"Required trunking area: {trunking_rec['required_area']:.0f} mm²", ln=True)
     pdf.cell(0, 8, f"Recommended trunking: {trunking_rec['recommendation']}", ln=True)
     
     return pdf.output(dest='S').encode('latin1')
@@ -234,6 +251,14 @@ with st.sidebar:
     proj_number = st.text_input("Project Number", value=st.session_state.project_metadata['project_number'])
     creator = st.text_input("Created by", value=st.session_state.project_metadata['creator'])
     proj_date = st.date_input("Date", value=datetime.strptime(st.session_state.project_metadata['date'], "%Y-%m-%d"))
+    
+    # --- NEW: MSB count selection (project-wide) ---
+    msb_count = st.number_input("Number of Main Switchboards (MSB)", 
+                                min_value=1, max_value=10, 
+                                value=st.session_state.msb_count, step=1,
+                                help="Set the total number of Main Switchboards for the whole project.")
+    st.session_state.msb_count = msb_count
+    
     st.session_state.project_metadata = {
         'project_name': proj_name,
         'project_number': proj_number,
@@ -262,19 +287,13 @@ with st.sidebar:
     else:
         z_db = 1
     
-    # --- Breaker type selection (NEW) ---
-    default_breaker = "MCB" if "DP" in TECH_REFS[z_type][4] or "SP" in TECH_REFS[z_type][4] else "MCCB"
-    breaker_type = st.selectbox("Breaker Type", BREAKER_TYPES, 
-                                index=BREAKER_TYPES.index(default_breaker) if default_breaker in BREAKER_TYPES else 0)
-    
-    # --- Lighting method selection ---
+    # --- Lighting ---
     light_method = st.radio(
         "Lighting Calculation Method",
         ["Load-based (W/m²)", "Lux-based (lumens)"],
         index=0
     )
     
-    # --- Custom lighting fixtures ---
     st.subheader("💡 Lighting Fixture Types")
     use_custom_fixtures = st.checkbox("Use multiple fixture types")
     
@@ -324,6 +343,7 @@ with st.sidebar:
             uf = st.slider("Utilization Factor", 0.3, 1.0, 0.7, 0.05)
             lux_params = {"lux": lux_val, "lumens_per_fixture": lumens, "mf": mf, "uf": uf}
     
+    # --- MSCP EV ---
     ev_load_kw = 0
     if z_type == "MSCP (Carpark)":
         lots = st.number_input("Number of parking lots", min_value=1, value=20, step=1)
@@ -333,6 +353,9 @@ with st.sidebar:
     # --- Manpower slider (WITH KEY) ---
     manpower = st.slider("Electricians on Site", 1, 20, 3, key="manpower_slider")
     
+    # --- Trunking spare capacity ---
+    trunking_spare = st.slider("Trunking spare capacity (%)", 0, 50, 20, 5, key="trunking_spare")
+    
     st.markdown("---")
     
     # --- MAIN ADD BUTTON ---
@@ -340,8 +363,9 @@ with st.sidebar:
         tech_data = TECH_REFS[z_type]
         
         if z_type in ["Lift (Passenger)", "Escalator"]:
+            total_power_kw = equipment_power
             calc = {
-                "total_power_kw": equipment_power,
+                "total_power_kw": total_power_kw,
                 "num_sockets": 0,
                 "isolator": tech_data[4],
                 "cable": tech_data[5],
@@ -366,6 +390,18 @@ with st.sidebar:
             )
             light_w_m2_used = calc["light_w_m2"]
             num_lights = calc["num_lights"]
+            total_power_kw = calc["total_power_kw"]
+        
+        # Auto‑select breaker rating & type
+        if total_power_kw > 5:
+            phase = 3
+            voltage = 400
+            ib = (total_power_kw * 1000) / (1.732 * voltage * 0.85)
+        else:
+            phase = 1
+            voltage = 230
+            ib = (total_power_kw * 1000) / (voltage * 0.9)
+        auto_rating, auto_type = auto_breaker_selection(ib, phase)
         
         zone_entry = {
             "description": z_name,
@@ -373,10 +409,11 @@ with st.sidebar:
             "area_m2": z_area,
             "power_w_m2": calc["power_w_m2"] if z_type not in ["Lift", "Escalator"] else 0,
             "light_w_m2": light_w_m2_used,
-            "total_power_kw": round(calc["total_power_kw"] if z_type not in ["Lift", "Escalator"] else equipment_power, 2),
+            "total_power_kw": round(total_power_kw, 2),
             "sockets": calc["num_sockets"],
             "isolator": calc["isolator"],
-            "breaker_type": breaker_type,   # ✅ Store breaker type
+            "breaker_rating": auto_rating,
+            "breaker_type": auto_type,
             "cable": calc["cable"],
             "lights": num_lights,
             "light_switches": calc["num_switches"],
@@ -386,7 +423,10 @@ with st.sidebar:
         }
         st.session_state.project.append(zone_entry)
         
+        # EV charging row
         if z_type == "MSCP (Carpark)" and ev_load_kw > 0:
+            ib_ev = (ev_load_kw * 1000) / (230 * 0.9)
+            ev_rating, ev_type = auto_breaker_selection(ib_ev, 1)
             ev_entry = {
                 "description": f"{z_name} - EV Charging",
                 "type": "EV Charging",
@@ -396,7 +436,8 @@ with st.sidebar:
                 "total_power_kw": round(ev_load_kw, 2),
                 "sockets": 0,
                 "isolator": "32A TP",
-                "breaker_type": "RCBO",   # Typical for EV
+                "breaker_rating": ev_rating,
+                "breaker_type": ev_type,
                 "cable": "6.0mm² 5C",
                 "lights": 0,
                 "light_switches": 0,
@@ -424,10 +465,13 @@ with st.sidebar:
                 desc = f"Lift {st.session_state.eq_counter['lift']}"
                 st.session_state.eq_counter['lift'] += 1
                 lift_tech = TECH_REFS["Lift (Passenger)"]
+                ib = (lift_power * 1000) / (1.732 * 400 * 0.85)
+                rating, btype = auto_breaker_selection(ib, 3)
                 entry = {
                     "description": desc, "type": "Lift (Passenger)", "area_m2": 0,
                     "power_w_m2": 0, "light_w_m2": 0, "total_power_kw": lift_power,
-                    "sockets": 0, "isolator": lift_tech[4], "breaker_type": "MCCB",
+                    "sockets": 0, "isolator": lift_tech[4],
+                    "breaker_rating": rating, "breaker_type": btype,
                     "cable": lift_tech[5], "lights": 0, "light_switches": 0,
                     "num_circuits": 1, "distance_m": 30, "db_count": 1,
                 }
@@ -436,10 +480,13 @@ with st.sidebar:
                 desc = f"Escalator {st.session_state.eq_counter['esc']}"
                 st.session_state.eq_counter['esc'] += 1
                 esc_tech = TECH_REFS["Escalator"]
+                ib = (esc_power * 1000) / (1.732 * 400 * 0.85)
+                rating, btype = auto_breaker_selection(ib, 3)
                 entry = {
                     "description": desc, "type": "Escalator", "area_m2": 0,
                     "power_w_m2": 0, "light_w_m2": 0, "total_power_kw": esc_power,
-                    "sockets": 0, "isolator": esc_tech[4], "breaker_type": "MCCB",
+                    "sockets": 0, "isolator": esc_tech[4],
+                    "breaker_rating": rating, "breaker_type": btype,
                     "cable": esc_tech[5], "lights": 0, "light_switches": 0,
                     "num_circuits": 1, "distance_m": 30, "db_count": 1,
                 }
@@ -451,6 +498,7 @@ with st.sidebar:
         st.session_state.project = []
         st.session_state.eq_counter = {'lift': 1, 'esc': 1}
         st.session_state.fixture_list = []
+        # Do not reset msb_count, keep user preference
         st.rerun()
 
 # --- 5. MAIN PAGE ---
@@ -489,23 +537,25 @@ if st.session_state.project:
     df = pd.DataFrame(st.session_state.project)
     
     expected_cols = ["description", "type", "area_m2", "power_w_m2", "light_w_m2", 
-                     "total_power_kw", "sockets", "isolator", "breaker_type", "cable",
-                     "lights", "light_switches", "num_circuits", "distance_m", "db_count"]
+                     "total_power_kw", "sockets", "isolator", "breaker_rating", "breaker_type",
+                     "cable", "lights", "light_switches", "num_circuits", "distance_m", "db_count"]
     for col in expected_cols:
         if col not in df.columns:
             if col in ["area_m2", "power_w_m2", "light_w_m2", "sockets", "lights", 
-                       "light_switches", "num_circuits", "distance_m", "db_count", "total_power_kw"]:
+                       "light_switches", "num_circuits", "distance_m", "db_count", "total_power_kw", "breaker_rating"]:
                 df[col] = 0
             else:
                 df[col] = ""
     
     display_cols = ["description", "type", "area_m2", "total_power_kw", "sockets", 
-                    "lights", "isolator", "breaker_type", "cable", "distance_m", "db_count", "num_circuits"]
+                    "lights", "isolator", "breaker_rating", "breaker_type", "cable", 
+                    "distance_m", "db_count", "num_circuits"]
     df_display = df[display_cols]
     st.dataframe(df_display, use_container_width=True, hide_index=True)
     
     total_building_power_kw = df["total_power_kw"].sum()
-    panel_req = estimate_panels(df)
+    # Use the user-defined MSB count
+    panel_req = estimate_panels(df, st.session_state.msb_count)
     
     col_a, col_b, col_c, col_d = st.columns(4)
     col_a.success(f"🏢 **Total Load: {total_building_power_kw:.2f} kW**")
@@ -515,7 +565,7 @@ if st.session_state.project:
 else:
     df = pd.DataFrame()
     st.info("No areas added yet. Use the sidebar to add your first zone.")
-    panel_req = {"msb": 0, "db": 0, "sub": 0}
+    panel_req = {"msb": st.session_state.msb_count, "db": 0, "sub": 0}
     total_building_power_kw = 0
 
 # --- 6. DETAILED ENGINEERING REPORT ---
@@ -564,7 +614,7 @@ if st.session_state.project:
             "Sockets": sockets,
             "Lights": lights,
             "Cable": cable_str,
-            "Breaker": row.get("breaker_type", ""),
+            "Breaker": f"{row.get('breaker_rating', '')}A {row.get('breaker_type', '')}",
             "V-Drop %": round(vd_pct, 2),
             "VD Status": vd_status,
             "DBs": db_cnt,
@@ -578,7 +628,6 @@ if st.session_state.project:
     st.divider()
     st.header("📊 Project Management & Testing")
     
-    # ✅ Retrieve manpower from session state (key used in slider)
     manpower = st.session_state.get('manpower_slider', 3)
     days = math.ceil(total_hrs / (manpower * 8)) if total_hrs > 0 else 0
     
@@ -637,7 +686,7 @@ else:
             st.error("❌ Room too small. Adjust dimensions.")
     room_check = {"length": room_len, "width": room_wid, "status": "OK" if width_ok and depth_ok else "FAIL"}
 
-# --- 8. CABLE TRUNKING / LADDER SIZING ---
+# --- 8. CABLE TRUNKING / LADDER SIZING (with spare capacity) ---
 st.header("📦 Cable Trunking / Ladder Sizing")
 
 if st.session_state.project and not df.empty:
@@ -649,16 +698,22 @@ if st.session_state.project and not df.empty:
             area_per_cable = CABLE_AREA[cable_size]
             total_cable_area += area_per_cable * circuits
     
+    spare_pct = st.session_state.get('trunking_spare', 20)
+    
     trunking_rec = {}
     trunking_rec['total_area'] = total_cable_area
-    rec_text, trunk_area, req_area = recommend_trunking(total_cable_area)
+    trunking_rec['spare_pct'] = spare_pct
+    rec_text, trunk_area, req_area, fill_factor = recommend_trunking(total_cable_area, spare_pct)
     trunking_rec['recommendation'] = rec_text
     trunking_rec['required_area'] = req_area if req_area else 0
+    trunking_rec['fill_factor'] = fill_factor
     
     col_t1, col_t2 = st.columns(2)
     with col_t1:
         st.metric("Total cable cross‑section", f"{total_cable_area:.0f} mm²")
-        st.metric("Required trunking area (45% fill)", f"{req_area:.0f} mm²" if req_area else "N/A")
+        st.metric(f"Spare capacity", f"{spare_pct}%")
+        st.metric(f"Effective fill factor", f"{fill_factor*100:.1f}%")
+        st.metric("Required trunking area", f"{req_area:.0f} mm²" if req_area else "N/A")
     with col_t2:
         st.success(f"**Recommended trunking:** {rec_text}")
         st.markdown("**Custom trunking check**")
@@ -666,14 +721,14 @@ if st.session_state.project and not df.empty:
         cust_h = st.number_input("Height (mm)", min_value=50, value=50, step=10)
         cust_area = cust_w * cust_h
         fill_pct = (total_cable_area / cust_area) * 100 if cust_area > 0 else 0
-        st.write(f"Fill ratio: {fill_pct:.1f}% (max 45%)")
-        if fill_pct <= 45:
+        st.write(f"Fill ratio: {fill_pct:.1f}% (max {fill_factor*100:.1f}%)")
+        if fill_pct <= fill_factor * 100:
             st.success("✅ Acceptable")
         else:
             st.error("❌ Overfilled – increase trunking size")
 else:
     st.info("Add project data to calculate trunking requirements.")
-    trunking_rec = {"recommendation": "N/A", "total_area": 0, "required_area": 0}
+    trunking_rec = {"recommendation": "N/A", "total_area": 0, "required_area": 0, "spare_pct": 20, "fill_factor": 0.45}
 
 # --- 9. CABLE SIZING TOOL ---
 st.header("⚡ Cable Sizing Tool")
@@ -696,7 +751,18 @@ manual_size = st.selectbox("Manual override (select cable size)",
 if manual_size != auto_size:
     st.warning(f"Manual selection: {manual_size} (auto would be {auto_size})")
 
-# --- 10. EXPORT REPORTS ---
+# --- 10. BREAKER SELECTION TOOL (standalone) ---
+st.header("🔌 Breaker Selection Tool")
+st.markdown("Auto‑select breaker rating & type based on load current.")
+col_b1, col_b2 = st.columns(2)
+with col_b1:
+    test_current = st.number_input("Test load current (A)", min_value=1.0, value=30.0, step=1.0, key="test_current")
+with col_b2:
+    test_phase = st.selectbox("Phase", [1, 3], index=1, format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase")
+auto_rating, auto_type = auto_breaker_selection(test_current, test_phase)
+st.info(f"✅ **Recommended breaker:** {auto_rating}A {auto_type}")
+
+# --- 11. EXPORT REPORTS ---
 st.header("📤 Export Project Data")
 col_e1, col_e2 = st.columns(2)
 with col_e1:
