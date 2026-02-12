@@ -56,6 +56,9 @@ TRUNKING_SIZES = [
 BREAKER_RATINGS = [6, 10, 13, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250, 320, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6300]
 BREAKER_TYPES = ["MCB", "MCCB", "RCBO", "RCCB", "ACB"]
 
+# --- POWER FACTOR (global) ---
+PF = 0.8
+
 # --- 2. INITIALISE SESSION STATE ---
 if 'project' not in st.session_state:
     st.session_state.project = []
@@ -73,7 +76,7 @@ if 'fixture_list' not in st.session_state:
 if 'msb_count' not in st.session_state:
     st.session_state.msb_count = 1
 if 'total_sub_count' not in st.session_state:
-    st.session_state.total_sub_count = 0   # will be updated based on project
+    st.session_state.total_sub_count = 0
 
 # --- 3. HELPER FUNCTIONS ---
 def add_fixture(wattage, qty):
@@ -129,6 +132,7 @@ def calculate_zone(area, tech_data, light_method, light_wattage_single,
         "total_power_w": total_power,
         "total_light_w": total_light_w,
         "total_power_kw": total_power_kw,
+        "total_apparent_kva": total_power_kw / PF,
         "num_sockets": num_sockets,
         "isolator": isolator,
         "cable": cable,
@@ -138,17 +142,11 @@ def calculate_zone(area, tech_data, light_method, light_wattage_single,
     }
 
 def estimate_panels(project_df, msb_count, sub_count_manual):
-    """
-    Return dict with number of MSB, DBs, sub‑boards.
-    - DBs: sum of per‑zone db_count (user override per zone)
-    - Sub‑boards: user manual entry (if provided), else count of zones >50kW
-    """
     if project_df.empty:
         return {"msb": msb_count, "db": 0, "sub": sub_count_manual}
     
     total_dbs = project_df["db_count"].sum()
     
-    # If user has not manually set sub count, compute from project
     if sub_count_manual == 0:
         sub_count = (project_df["total_power_kw"] > 50).sum()
     else:
@@ -207,7 +205,7 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     pdf.set_font("Arial", "", 10)
     
     if not project_df.empty:
-        cols = ["description", "type", "area_m2", "total_power_kw", "sockets",
+        cols = ["description", "type", "area_m2", "total_power_kw", "total_apparent_kva", "sockets",
                 "isolator", "breaker_rating", "breaker_type", "lights", "num_circuits", "db_count"]
         display_cols = [c for c in cols if c in project_df.columns]
         pdf_data = project_df[display_cols].copy()
@@ -215,7 +213,7 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
             line = f"{row['description']} | {row['type']} | "
             if 'area_m2' in row:
                 line += f"{row['area_m2']:.0f} m² | "
-            line += f"{row['total_power_kw']:.2f} kW | "
+            line += f"{row['total_power_kw']:.2f} kW / {row['total_apparent_kva']:.2f} kVA | "
             if 'sockets' in row:
                 line += f"S:{row['sockets']} | "
             line += f"{row['isolator']} | "
@@ -229,7 +227,9 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
                 line += f"DBs:{row['db_count']}"
             pdf.cell(0, 8, line, ln=True)
     pdf.ln(5)
-    pdf.cell(0, 8, f"Total Building Load: {project_df['total_power_kw'].sum():.2f} kW", ln=True)
+    total_kw = project_df['total_power_kw'].sum()
+    total_kva = total_kw / PF
+    pdf.cell(0, 8, f"Total Building Load: {total_kw:.2f} kW / {total_kva:.2f} kVA", ln=True)
     pdf.ln(10)
     
     pdf.set_font("Arial", "B", 12)
@@ -254,12 +254,10 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     
     return pdf.output(dest='S').encode('latin1')
 
-# --- Callback functions for suggestion buttons ---
 def suggest_msb():
     if st.session_state.project:
         df = pd.DataFrame(st.session_state.project)
         total_load = df["total_power_kw"].sum()
-        # Rule: 1 MSB per 1000 kW, minimum 1
         suggested = max(1, math.ceil(total_load / 1000))
         st.session_state.msb_count = suggested
     else:
@@ -281,20 +279,20 @@ with st.sidebar:
     creator = st.text_input("Created by", value=st.session_state.project_metadata['creator'])
     proj_date = st.date_input("Date", value=datetime.strptime(st.session_state.project_metadata['date'], "%Y-%m-%d"))
     
-    # --- MSB count with suggestion ---
+    # MSB count with suggestion
     col_msb1, col_msb2 = st.columns([3, 1])
     with col_msb1:
         msb_count = st.number_input("Number of Main Switchboards (MSB)", 
                                     min_value=1, max_value=10, 
                                     value=st.session_state.msb_count, step=1)
     with col_msb2:
-        st.write("")  # spacing
+        st.write("")
         st.write("")
         if st.button("💡 Suggest", key="suggest_msb_btn", on_click=suggest_msb):
             pass
     st.session_state.msb_count = msb_count
     
-    # --- Sub‑board count with suggestion ---
+    # Sub‑board count with suggestion
     col_sub1, col_sub2 = st.columns([3, 1])
     with col_sub1:
         total_sub_count = st.number_input("Total Sub‑boards (optional)", 
@@ -331,7 +329,6 @@ with st.sidebar:
     z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0, step=1.0)
     
     if z_type not in ["Lift (Passenger)", "Escalator"]:
-        # Suggested DB count per zone (based on area / DB_Cap_sqm)
         suggested_db = math.ceil(z_area / TECH_REFS[z_type][6]) if TECH_REFS[z_type][6] > 0 else 1
         z_db = st.number_input("Number of Sub‑boards (DBs) for this zone", 
                                min_value=1, value=suggested_db, step=1,
@@ -339,7 +336,7 @@ with st.sidebar:
     else:
         z_db = 1
     
-    # --- Lighting ---
+    # Lighting
     light_method = st.radio(
         "Lighting Calculation Method",
         ["Load-based (W/m²)", "Lux-based (lumens)"],
@@ -395,17 +392,17 @@ with st.sidebar:
             uf = st.slider("Utilization Factor", 0.3, 1.0, 0.7, 0.05)
             lux_params = {"lux": lux_val, "lumens_per_fixture": lumens, "mf": mf, "uf": uf}
     
-    # --- MSCP EV ---
+    # MSCP EV
     ev_load_kw = 0
     if z_type == "MSCP (Carpark)":
         lots = st.number_input("Number of parking lots", min_value=1, value=20, step=1)
         ev_load_kw = (lots * 7.4) * 0.20 * 1.20
         st.info(f"EV charging reserve: {ev_load_kw:.1f} kW")
     
-    # --- Manpower slider ---
+    # Manpower slider
     manpower = st.slider("Electricians on Site", 1, 20, 3, key="manpower_slider")
     
-    # --- Trunking spare capacity ---
+    # Trunking spare capacity
     trunking_spare = st.slider("Trunking spare capacity (%)", 0, 50, 20, 5, key="trunking_spare")
     
     st.markdown("---")
@@ -418,6 +415,7 @@ with st.sidebar:
             total_power_kw = equipment_power
             calc = {
                 "total_power_kw": total_power_kw,
+                "total_apparent_kva": total_power_kw / PF,
                 "num_sockets": 0,
                 "isolator": tech_data[4],
                 "cable": tech_data[5],
@@ -443,16 +441,17 @@ with st.sidebar:
             light_w_m2_used = calc["light_w_m2"]
             num_lights = calc["num_lights"]
             total_power_kw = calc["total_power_kw"]
+            total_apparent_kva = calc["total_apparent_kva"]
         
-        # Auto‑select breaker rating & type
+        # Auto‑select breaker rating & type based on current with PF=0.8
         if total_power_kw > 5:
             phase = 3
             voltage = 400
-            ib = (total_power_kw * 1000) / (1.732 * voltage * 0.85)
+            ib = (total_power_kw * 1000) / (1.732 * voltage * PF)
         else:
             phase = 1
             voltage = 230
-            ib = (total_power_kw * 1000) / (voltage * 0.9)
+            ib = (total_power_kw * 1000) / (voltage * PF)
         auto_rating, auto_type = auto_breaker_selection(ib, phase)
         
         zone_entry = {
@@ -462,6 +461,7 @@ with st.sidebar:
             "power_w_m2": calc["power_w_m2"] if z_type not in ["Lift", "Escalator"] else 0,
             "light_w_m2": light_w_m2_used,
             "total_power_kw": round(total_power_kw, 2),
+            "total_apparent_kva": round(total_apparent_kva, 2),
             "sockets": calc["num_sockets"],
             "isolator": calc["isolator"],
             "breaker_rating": auto_rating,
@@ -477,7 +477,7 @@ with st.sidebar:
         
         # EV charging row
         if z_type == "MSCP (Carpark)" and ev_load_kw > 0:
-            ib_ev = (ev_load_kw * 1000) / (230 * 0.9)
+            ib_ev = (ev_load_kw * 1000) / (230 * PF)
             ev_rating, ev_type = auto_breaker_selection(ib_ev, 1)
             ev_entry = {
                 "description": f"{z_name} - EV Charging",
@@ -486,6 +486,7 @@ with st.sidebar:
                 "power_w_m2": 0,
                 "light_w_m2": 0,
                 "total_power_kw": round(ev_load_kw, 2),
+                "total_apparent_kva": round(ev_load_kw / PF, 2),
                 "sockets": 0,
                 "isolator": "32A TP",
                 "breaker_rating": ev_rating,
@@ -517,11 +518,13 @@ with st.sidebar:
                 desc = f"Lift {st.session_state.eq_counter['lift']}"
                 st.session_state.eq_counter['lift'] += 1
                 lift_tech = TECH_REFS["Lift (Passenger)"]
-                ib = (lift_power * 1000) / (1.732 * 400 * 0.85)
+                ib = (lift_power * 1000) / (1.732 * 400 * PF)
                 rating, btype = auto_breaker_selection(ib, 3)
                 entry = {
                     "description": desc, "type": "Lift (Passenger)", "area_m2": 0,
-                    "power_w_m2": 0, "light_w_m2": 0, "total_power_kw": lift_power,
+                    "power_w_m2": 0, "light_w_m2": 0, 
+                    "total_power_kw": lift_power,
+                    "total_apparent_kva": lift_power / PF,
                     "sockets": 0, "isolator": lift_tech[4],
                     "breaker_rating": rating, "breaker_type": btype,
                     "cable": lift_tech[5], "lights": 0, "light_switches": 0,
@@ -532,11 +535,13 @@ with st.sidebar:
                 desc = f"Escalator {st.session_state.eq_counter['esc']}"
                 st.session_state.eq_counter['esc'] += 1
                 esc_tech = TECH_REFS["Escalator"]
-                ib = (esc_power * 1000) / (1.732 * 400 * 0.85)
+                ib = (esc_power * 1000) / (1.732 * 400 * PF)
                 rating, btype = auto_breaker_selection(ib, 3)
                 entry = {
                     "description": desc, "type": "Escalator", "area_m2": 0,
-                    "power_w_m2": 0, "light_w_m2": 0, "total_power_kw": esc_power,
+                    "power_w_m2": 0, "light_w_m2": 0,
+                    "total_power_kw": esc_power,
+                    "total_apparent_kva": esc_power / PF,
                     "sockets": 0, "isolator": esc_tech[4],
                     "breaker_rating": rating, "breaker_type": btype,
                     "cable": esc_tech[5], "lights": 0, "light_switches": 0,
@@ -550,7 +555,6 @@ with st.sidebar:
         st.session_state.project = []
         st.session_state.eq_counter = {'lift': 1, 'esc': 1}
         st.session_state.fixture_list = []
-        # Reset sub count to 0 (auto) but keep MSB at 1
         st.session_state.total_sub_count = 0
         st.session_state.msb_count = 1
         st.rerun()
@@ -576,6 +580,7 @@ if z_type not in ["Lift (Passenger)", "Escalator"]:
     with col1:
         st.metric("Power Density", f"{calc_preview['power_w_m2']} W/m²")
         st.metric("Total Power", f"{calc_preview['total_power_kw']:.2f} kW")
+        st.metric("Apparent Power", f"{calc_preview['total_apparent_kva']:.2f} kVA")
     with col2:
         st.metric("13A Sockets", calc_preview["num_sockets"])
         st.metric("Isolator", calc_preview["isolator"])
@@ -583,7 +588,7 @@ if z_type not in ["Lift (Passenger)", "Escalator"]:
         st.metric("Light Switches", calc_preview["num_switches"])
         st.metric("Lights", calc_preview["num_lights"])
 else:
-    st.info(f"**Equipment power:** {equipment_power} kW | **Isolator:** {TECH_REFS[z_type][4]}")
+    st.info(f"**Equipment power:** {equipment_power} kW / {equipment_power/PF:.2f} kVA | **Isolator:** {TECH_REFS[z_type][4]}")
 
 # --- 5.2 Project Summary Table ---
 st.header("📋 Project Summary")
@@ -591,27 +596,30 @@ if st.session_state.project:
     df = pd.DataFrame(st.session_state.project)
     
     expected_cols = ["description", "type", "area_m2", "power_w_m2", "light_w_m2", 
-                     "total_power_kw", "sockets", "isolator", "breaker_rating", "breaker_type",
-                     "cable", "lights", "light_switches", "num_circuits", "distance_m", "db_count"]
+                     "total_power_kw", "total_apparent_kva", "sockets", "isolator", 
+                     "breaker_rating", "breaker_type", "cable", "lights", 
+                     "light_switches", "num_circuits", "distance_m", "db_count"]
     for col in expected_cols:
         if col not in df.columns:
             if col in ["area_m2", "power_w_m2", "light_w_m2", "sockets", "lights", 
-                       "light_switches", "num_circuits", "distance_m", "db_count", "total_power_kw", "breaker_rating"]:
+                       "light_switches", "num_circuits", "distance_m", "db_count", 
+                       "total_power_kw", "total_apparent_kva", "breaker_rating"]:
                 df[col] = 0
             else:
                 df[col] = ""
     
-    display_cols = ["description", "type", "area_m2", "total_power_kw", "sockets", 
-                    "lights", "isolator", "breaker_rating", "breaker_type", "cable", 
-                    "distance_m", "db_count", "num_circuits"]
+    display_cols = ["description", "type", "area_m2", "total_power_kw", "total_apparent_kva", 
+                    "sockets", "lights", "isolator", "breaker_rating", "breaker_type", 
+                    "cable", "distance_m", "db_count", "num_circuits"]
     df_display = df[display_cols]
     st.dataframe(df_display, use_container_width=True, hide_index=True)
     
     total_building_power_kw = df["total_power_kw"].sum()
+    total_building_apparent_kva = total_building_power_kw / PF
     panel_req = estimate_panels(df, st.session_state.msb_count, st.session_state.total_sub_count)
     
     col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.success(f"🏢 **Total Load: {total_building_power_kw:.2f} kW**")
+    col_a.success(f"🏢 **Total Load: {total_building_power_kw:.2f} kW / {total_building_apparent_kva:.2f} kVA**")
     col_b.metric("Main Switchboard", panel_req["msb"])
     col_c.metric("Distribution Boards (total)", panel_req["db"])
     col_d.metric("Sub-boards", panel_req["sub"])
@@ -642,10 +650,11 @@ if st.session_state.project:
         md_kw = total_kw * 0.8
         total_md_kw += md_kw
         
+        # Voltage drop using PF = 0.8
         vd_pct = 0.0
         vd_status = "N/A"
         if area > 0 and isinstance(cable_str, str) and cable_str.split()[0] in CABLE_MV_A_M and dist > 0:
-            ib = (total_kw * 1000) / (1.732 * 400 * 0.85)
+            ib = (total_kw * 1000) / (1.732 * 400 * PF)
             base_size = cable_str.split()[0]
             mv = CABLE_MV_A_M.get(base_size, 0)
             if mv > 0:
@@ -663,6 +672,7 @@ if st.session_state.project:
             "Zone": row["description"],
             "Type": row["type"],
             "Load (kW)": round(total_kw, 2),
+            "Load (kVA)": round(total_kw / PF, 2),
             "MD (kW)": round(md_kw, 2),
             "Sockets": sockets,
             "Lights": lights,
@@ -814,6 +824,22 @@ with col_b2:
     test_phase = st.selectbox("Phase", [1, 3], index=1, format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase")
 auto_rating, auto_type = auto_breaker_selection(test_current, test_phase)
 st.info(f"✅ **Recommended breaker:** {auto_rating}A {auto_type}")
+
+# Add a simple kW→A converter with PF=0.8
+st.markdown("---")
+st.subheader("📐 Quick kW → A Converter (PF = 0.8)")
+col_conv1, col_conv2, col_conv3 = st.columns(3)
+with col_conv1:
+    kw_input = st.number_input("Power (kW)", min_value=0.0, value=10.0, step=1.0)
+with col_conv2:
+    volt_input = st.selectbox("Voltage", [230, 400], index=1)
+with col_conv3:
+    phase_input = st.selectbox("Phase", [1, 3], index=1, format_func=lambda x: "Single‑phase" if x == 1 else "Three‑phase")
+if phase_input == 1:
+    current_output = (kw_input * 1000) / (volt_input * PF)
+else:
+    current_output = (kw_input * 1000) / (1.732 * volt_input * PF)
+st.info(f"⚡ **Current:** {current_output:.1f} A")
 
 # --- 11. EXPORT REPORTS ---
 st.header("📤 Export Project Data")
