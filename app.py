@@ -71,7 +71,9 @@ if 'project_metadata' not in st.session_state:
 if 'fixture_list' not in st.session_state:
     st.session_state.fixture_list = []
 if 'msb_count' not in st.session_state:
-    st.session_state.msb_count = 1   # default 1 MSB
+    st.session_state.msb_count = 1
+if 'total_sub_count' not in st.session_state:
+    st.session_state.total_sub_count = 0   # will be updated based on project
 
 # --- 3. HELPER FUNCTIONS ---
 def add_fixture(wattage, qty):
@@ -135,14 +137,24 @@ def calculate_zone(area, tech_data, light_method, light_wattage_single,
         "num_circuits": num_circuits,
     }
 
-def estimate_panels(project_df, msb_count):
-    """Return dict with number of main switchboard, DBs and sub-boards."""
+def estimate_panels(project_df, msb_count, sub_count_manual):
+    """
+    Return dict with number of MSB, DBs, sub‑boards.
+    - DBs: sum of per‑zone db_count (user override per zone)
+    - Sub‑boards: user manual entry (if provided), else count of zones >50kW
+    """
     if project_df.empty:
-        return {"msb": msb_count, "db": 0, "sub": 0}
-    total_circuits = project_df["num_circuits"].sum()
-    db_count = math.ceil(total_circuits / 18)
-    sub_count = (project_df["total_power_kw"] > 50).sum()
-    return {"msb": msb_count, "db": db_count, "sub": sub_count}
+        return {"msb": msb_count, "db": 0, "sub": sub_count_manual}
+    
+    total_dbs = project_df["db_count"].sum()
+    
+    # If user has not manually set sub count, compute from project
+    if sub_count_manual == 0:
+        sub_count = (project_df["total_power_kw"] > 50).sum()
+    else:
+        sub_count = sub_count_manual
+    
+    return {"msb": msb_count, "db": total_dbs, "sub": sub_count}
 
 def auto_cable_size(current, length, voltage=230, phase=1, max_vd_pct=4):
     vd_limit = voltage * max_vd_pct / 100
@@ -159,7 +171,6 @@ def auto_cable_size(current, length, voltage=230, phase=1, max_vd_pct=4):
     return suitable[0] if suitable else ">50mm² (custom)"
 
 def auto_breaker_selection(current, phase=1):
-    """Select standard breaker rating and type based on current."""
     rating = next((r for r in BREAKER_RATINGS if r >= current), BREAKER_RATINGS[-1])
     if rating <= 125:
         btype = "MCB"
@@ -170,7 +181,6 @@ def auto_breaker_selection(current, phase=1):
     return rating, btype
 
 def recommend_trunking(total_cable_area_mm2, spare_pct=20):
-    """Recommend trunking with spare capacity."""
     fill_factor = 0.45 * (1 - spare_pct / 100)
     required_area = total_cable_area_mm2 / fill_factor
     for w, h in TRUNKING_SIZES:
@@ -226,8 +236,8 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     pdf.cell(0, 10, "Panel Schedule & Space Planning", ln=True)
     pdf.set_font("Arial", "", 10)
     pdf.cell(0, 8, f"Main Switchboard: {panel_req['msb']}", ln=True)
-    pdf.cell(0, 8, f"Distribution Boards (18-way): {panel_req['db']}", ln=True)
-    pdf.cell(0, 8, f"Sub-boards (>50kW zones): {panel_req['sub']}", ln=True)
+    pdf.cell(0, 8, f"Distribution Boards (total): {panel_req['db']}", ln=True)
+    pdf.cell(0, 8, f"Sub-boards: {panel_req['sub']}", ln=True)
     pdf.ln(5)
     pdf.cell(0, 8, f"Electrical Room: {room_check['length']}m x {room_check['width']}m", ln=True)
     pdf.cell(0, 8, f"800mm clearance check: {room_check['status']}", ln=True)
@@ -244,6 +254,25 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     
     return pdf.output(dest='S').encode('latin1')
 
+# --- Callback functions for suggestion buttons ---
+def suggest_msb():
+    if st.session_state.project:
+        df = pd.DataFrame(st.session_state.project)
+        total_load = df["total_power_kw"].sum()
+        # Rule: 1 MSB per 1000 kW, minimum 1
+        suggested = max(1, math.ceil(total_load / 1000))
+        st.session_state.msb_count = suggested
+    else:
+        st.session_state.msb_count = 1
+
+def suggest_sub():
+    if st.session_state.project:
+        df = pd.DataFrame(st.session_state.project)
+        suggested = (df["total_power_kw"] > 50).sum()
+        st.session_state.total_sub_count = suggested
+    else:
+        st.session_state.total_sub_count = 0
+
 # --- 4. SIDEBAR: PROJECT METADATA & SITE PARAMETERS ---
 with st.sidebar:
     st.header("📁 Project Information")
@@ -252,12 +281,32 @@ with st.sidebar:
     creator = st.text_input("Created by", value=st.session_state.project_metadata['creator'])
     proj_date = st.date_input("Date", value=datetime.strptime(st.session_state.project_metadata['date'], "%Y-%m-%d"))
     
-    # --- NEW: MSB count selection (project-wide) ---
-    msb_count = st.number_input("Number of Main Switchboards (MSB)", 
-                                min_value=1, max_value=10, 
-                                value=st.session_state.msb_count, step=1,
-                                help="Set the total number of Main Switchboards for the whole project.")
+    # --- MSB count with suggestion ---
+    col_msb1, col_msb2 = st.columns([3, 1])
+    with col_msb1:
+        msb_count = st.number_input("Number of Main Switchboards (MSB)", 
+                                    min_value=1, max_value=10, 
+                                    value=st.session_state.msb_count, step=1)
+    with col_msb2:
+        st.write("")  # spacing
+        st.write("")
+        if st.button("💡 Suggest", key="suggest_msb_btn", on_click=suggest_msb):
+            pass
     st.session_state.msb_count = msb_count
+    
+    # --- Sub‑board count with suggestion ---
+    col_sub1, col_sub2 = st.columns([3, 1])
+    with col_sub1:
+        total_sub_count = st.number_input("Total Sub‑boards (optional)", 
+                                          min_value=0, max_value=50, 
+                                          value=st.session_state.total_sub_count, step=1,
+                                          help="Leave 0 to auto‑compute from zones >50kW")
+    with col_sub2:
+        st.write("")
+        st.write("")
+        if st.button("💡 Suggest", key="suggest_sub_btn", on_click=suggest_sub):
+            pass
+    st.session_state.total_sub_count = total_sub_count
     
     st.session_state.project_metadata = {
         'project_name': proj_name,
@@ -282,8 +331,11 @@ with st.sidebar:
     z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0, step=1.0)
     
     if z_type not in ["Lift (Passenger)", "Escalator"]:
+        # Suggested DB count per zone (based on area / DB_Cap_sqm)
         suggested_db = math.ceil(z_area / TECH_REFS[z_type][6]) if TECH_REFS[z_type][6] > 0 else 1
-        z_db = st.number_input("Number of Sub‑boards (DBs)", min_value=1, value=suggested_db, step=1)
+        z_db = st.number_input("Number of Sub‑boards (DBs) for this zone", 
+                               min_value=1, value=suggested_db, step=1,
+                               help="You can override the suggested value.")
     else:
         z_db = 1
     
@@ -350,7 +402,7 @@ with st.sidebar:
         ev_load_kw = (lots * 7.4) * 0.20 * 1.20
         st.info(f"EV charging reserve: {ev_load_kw:.1f} kW")
     
-    # --- Manpower slider (WITH KEY) ---
+    # --- Manpower slider ---
     manpower = st.slider("Electricians on Site", 1, 20, 3, key="manpower_slider")
     
     # --- Trunking spare capacity ---
@@ -498,7 +550,9 @@ with st.sidebar:
         st.session_state.project = []
         st.session_state.eq_counter = {'lift': 1, 'esc': 1}
         st.session_state.fixture_list = []
-        # Do not reset msb_count, keep user preference
+        # Reset sub count to 0 (auto) but keep MSB at 1
+        st.session_state.total_sub_count = 0
+        st.session_state.msb_count = 1
         st.rerun()
 
 # --- 5. MAIN PAGE ---
@@ -554,18 +608,17 @@ if st.session_state.project:
     st.dataframe(df_display, use_container_width=True, hide_index=True)
     
     total_building_power_kw = df["total_power_kw"].sum()
-    # Use the user-defined MSB count
-    panel_req = estimate_panels(df, st.session_state.msb_count)
+    panel_req = estimate_panels(df, st.session_state.msb_count, st.session_state.total_sub_count)
     
     col_a, col_b, col_c, col_d = st.columns(4)
     col_a.success(f"🏢 **Total Load: {total_building_power_kw:.2f} kW**")
     col_b.metric("Main Switchboard", panel_req["msb"])
-    col_c.metric("Distribution Boards", panel_req["db"])
+    col_c.metric("Distribution Boards (total)", panel_req["db"])
     col_d.metric("Sub-boards", panel_req["sub"])
 else:
     df = pd.DataFrame()
     st.info("No areas added yet. Use the sidebar to add your first zone.")
-    panel_req = {"msb": st.session_state.msb_count, "db": 0, "sub": 0}
+    panel_req = {"msb": st.session_state.msb_count, "db": 0, "sub": st.session_state.total_sub_count}
     total_building_power_kw = 0
 
 # --- 6. DETAILED ENGINEERING REPORT ---
