@@ -78,6 +78,15 @@ if 'msb_count' not in st.session_state:
 if 'total_sub_count' not in st.session_state:
     st.session_state.total_sub_count = 0
 
+# --- NEW: Trunking categories ---
+if 'trunking_categories' not in st.session_state:
+    # Default categories
+    st.session_state.trunking_categories = {
+        "Normal Power": {"zones": [], "spare_pct": 20},
+        "Emergency Power": {"zones": [], "spare_pct": 20},
+        "Lighting": {"zones": [], "spare_pct": 20}
+    }
+
 # --- 3. HELPER FUNCTIONS ---
 def add_fixture(wattage, qty):
     st.session_state.fixture_list.append({"wattage": wattage, "qty": qty})
@@ -186,7 +195,7 @@ def recommend_trunking(total_cable_area_mm2, spare_pct=20):
             return f"{w} x {h} mm", w*h, required_area, fill_factor
     return ">300x150 mm (custom)", None, required_area, fill_factor
 
-def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
+def generate_pdf(project_df, panel_req, room_check, metadata, trunking_recs):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
@@ -206,7 +215,7 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     
     if not project_df.empty:
         cols = ["description", "type", "area_m2", "total_power_kw", "total_apparent_kva", "sockets",
-                "isolator", "breaker_rating", "breaker_type", "lights", "num_circuits", "db_count"]
+                "isolator", "breaker_rating", "breaker_type", "lights", "num_circuits", "db_count", "trunking_category"]
         display_cols = [c for c in cols if c in project_df.columns]
         pdf_data = project_df[display_cols].copy()
         for _, row in pdf_data.iterrows():
@@ -224,7 +233,9 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
             if 'num_circuits' in row:
                 line += f"Ckts:{row['num_circuits']} | "
             if 'db_count' in row:
-                line += f"DBs:{row['db_count']}"
+                line += f"DBs:{row['db_count']} | "
+            if 'trunking_category' in row:
+                line += f"Cat:{row['trunking_category']}"
             pdf.cell(0, 8, line, ln=True)
     pdf.ln(5)
     total_kw = project_df['total_power_kw'].sum()
@@ -244,13 +255,16 @@ def generate_pdf(project_df, panel_req, room_check, metadata, trunking_rec):
     pdf.ln(5)
     
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "Cable Trunking Recommendation", ln=True)
+    pdf.cell(0, 10, "Cable Trunking Recommendations by Service", ln=True)
     pdf.set_font("Arial", "", 10)
-    pdf.cell(0, 8, f"Total cable cross‑section: {trunking_rec['total_area']:.0f} mm²", ln=True)
-    pdf.cell(0, 8, f"Spare capacity: {trunking_rec['spare_pct']}%", ln=True)
-    pdf.cell(0, 8, f"Effective fill factor: {trunking_rec['fill_factor']*100:.1f}%", ln=True)
-    pdf.cell(0, 8, f"Required trunking area: {trunking_rec['required_area']:.0f} mm²", ln=True)
-    pdf.cell(0, 8, f"Recommended trunking: {trunking_rec['recommendation']}", ln=True)
+    for cat_name, rec in trunking_recs.items():
+        pdf.cell(0, 8, f"Category: {cat_name}", ln=True)
+        pdf.cell(0, 8, f"  Total cable cross‑section: {rec['total_area']:.0f} mm²", ln=True)
+        pdf.cell(0, 8, f"  Spare capacity: {rec['spare_pct']}%", ln=True)
+        pdf.cell(0, 8, f"  Effective fill factor: {rec['fill_factor']*100:.1f}%", ln=True)
+        pdf.cell(0, 8, f"  Required trunking area: {rec['required_area']:.0f} mm²", ln=True)
+        pdf.cell(0, 8, f"  Recommended trunking: {rec['recommendation']}", ln=True)
+        pdf.ln(3)
     
     return pdf.output(dest='S').encode('latin1')
 
@@ -270,6 +284,28 @@ def suggest_sub():
         st.session_state.total_sub_count = suggested
     else:
         st.session_state.total_sub_count = 0
+
+# --- NEW: Trunking category management functions ---
+def add_trunking_category():
+    new_name = f"Category {len(st.session_state.trunking_categories)+1}"
+    st.session_state.trunking_categories[new_name] = {"zones": [], "spare_pct": 20}
+
+def delete_trunking_category(cat_name):
+    if cat_name in st.session_state.trunking_categories and len(st.session_state.trunking_categories) > 1:
+        del st.session_state.trunking_categories[cat_name]
+        # Update zones that were assigned to this category - set to first available category
+        first_cat = list(st.session_state.trunking_categories.keys())[0]
+        for zone in st.session_state.project:
+            if zone.get("trunking_category") == cat_name:
+                zone["trunking_category"] = first_cat
+        # Also remove from category zone lists
+        for zone in st.session_state.project:
+            if zone.get("trunking_category") == cat_name:
+                zone["trunking_category"] = first_cat
+
+def update_zone_category(zone_index, new_category):
+    if 0 <= zone_index < len(st.session_state.project):
+        st.session_state.project[zone_index]["trunking_category"] = new_category
 
 # --- 4. SIDEBAR: PROJECT METADATA & SITE PARAMETERS ---
 with st.sidebar:
@@ -314,6 +350,38 @@ with st.sidebar:
     }
     
     st.markdown("---")
+    
+    # --- NEW: Trunking Category Management ---
+    st.header("📦 Trunking Categories")
+    st.caption("Define separate trunking runs for different services.")
+    
+    # Display existing categories with spare % adjustment
+    cats_to_delete = []
+    for cat_name, cat_data in st.session_state.trunking_categories.items():
+        col_c1, col_c2, col_c3 = st.columns([3, 1, 1])
+        with col_c1:
+            st.text(cat_name)
+        with col_c2:
+            new_spare = st.number_input("Spare %", min_value=0, max_value=50, value=cat_data["spare_pct"], 
+                                        step=5, key=f"spare_{cat_name}", label_visibility="collapsed")
+            if new_spare != cat_data["spare_pct"]:
+                st.session_state.trunking_categories[cat_name]["spare_pct"] = new_spare
+        with col_c3:
+            if len(st.session_state.trunking_categories) > 1:
+                if st.button("🗑️", key=f"del_cat_{cat_name}"):
+                    cats_to_delete.append(cat_name)
+        st.markdown("---")
+    
+    for cat_name in cats_to_delete:
+        delete_trunking_category(cat_name)
+        st.rerun()
+    
+    if st.button("➕ Add Category", key="add_category_btn"):
+        add_trunking_category()
+        st.rerun()
+    
+    st.markdown("---")
+    
     st.header("🏢 Site Parameters")
     z_name = st.text_input("Area Description", "Level 1", key="z_name")
     z_type = st.selectbox("Building Type", list(TECH_REFS.keys()), key="z_type")
@@ -335,6 +403,11 @@ with st.sidebar:
                                help="You can override the suggested value.", key="z_db")
     else:
         z_db = 1
+    
+    # --- Trunking category assignment for this zone ---
+    category_options = list(st.session_state.trunking_categories.keys())
+    default_cat = category_options[0] if category_options else "Unassigned"
+    trunking_cat = st.selectbox("Trunking Category", category_options, index=0, key="trunking_cat")
     
     # Lighting
     light_method = st.radio(
@@ -402,9 +475,6 @@ with st.sidebar:
     # Manpower slider
     manpower = st.slider("Electricians on Site", 1, 20, 3, key="manpower_slider")
     
-    # Trunking spare capacity
-    trunking_spare = st.slider("Trunking spare capacity (%)", 0, 50, 20, 5, key="trunking_spare")
-    
     st.markdown("---")
     
     # --- MAIN ADD BUTTON ---
@@ -442,7 +512,7 @@ with st.sidebar:
             num_lights = calc["num_lights"]
             total_power_kw = calc["total_power_kw"]
         
-        # Auto‑select breaker rating & type based on current with PF=0.8
+        # Auto‑select breaker rating & type
         if total_power_kw > 5:
             phase = 3
             voltage = 400
@@ -471,8 +541,13 @@ with st.sidebar:
             "num_circuits": calc["num_circuits"],
             "distance_m": z_dist,
             "db_count": z_db,
+            "trunking_category": trunking_cat,  # Store category
         }
         st.session_state.project.append(zone_entry)
+        
+        # Also add to category zone list (for quick lookup)
+        if trunking_cat in st.session_state.trunking_categories:
+            st.session_state.trunking_categories[trunking_cat]["zones"].append(len(st.session_state.project)-1)
         
         # EV charging row
         if z_type == "MSCP (Carpark)" and ev_load_kw > 0:
@@ -496,8 +571,11 @@ with st.sidebar:
                 "num_circuits": math.ceil(ev_load_kw / 7.4),
                 "distance_m": z_dist,
                 "db_count": 1,
+                "trunking_category": trunking_cat,  # Assign same category
             }
             st.session_state.project.append(ev_entry)
+            if trunking_cat in st.session_state.trunking_categories:
+                st.session_state.trunking_categories[trunking_cat]["zones"].append(len(st.session_state.project)-1)
         
         st.success(f"Added {z_name}")
     
@@ -511,6 +589,11 @@ with st.sidebar:
         with col_eq2:
             esc_power = st.number_input("Escalator Power (kW)", min_value=0.0, value=22.0, step=1.0, key="esc_power_side")
             esc_qty = st.number_input("Quantity", min_value=0, value=1, step=1, key="esc_qty_side")
+        
+        # Category assignment for fixed equipment
+        fixed_cat = st.selectbox("Trunking Category for these units", 
+                                 list(st.session_state.trunking_categories.keys()), 
+                                 key="fixed_cat")
         
         if st.button("➕ Add Fixed Equipment", use_container_width=True, key="add_fixed_btn"):
             for i in range(lift_qty):
@@ -528,8 +611,11 @@ with st.sidebar:
                     "breaker_rating": rating, "breaker_type": btype,
                     "cable": lift_tech[5], "lights": 0, "light_switches": 0,
                     "num_circuits": 1, "distance_m": 30, "db_count": 1,
+                    "trunking_category": fixed_cat,
                 }
                 st.session_state.project.append(entry)
+                if fixed_cat in st.session_state.trunking_categories:
+                    st.session_state.trunking_categories[fixed_cat]["zones"].append(len(st.session_state.project)-1)
             for i in range(esc_qty):
                 desc = f"Escalator {st.session_state.eq_counter['esc']}"
                 st.session_state.eq_counter['esc'] += 1
@@ -545,8 +631,11 @@ with st.sidebar:
                     "breaker_rating": rating, "breaker_type": btype,
                     "cable": esc_tech[5], "lights": 0, "light_switches": 0,
                     "num_circuits": 1, "distance_m": 30, "db_count": 1,
+                    "trunking_category": fixed_cat,
                 }
                 st.session_state.project.append(entry)
+                if fixed_cat in st.session_state.trunking_categories:
+                    st.session_state.trunking_categories[fixed_cat]["zones"].append(len(st.session_state.project)-1)
             st.success(f"Added {lift_qty} lift(s) and {esc_qty} escalator(s)")
     
     st.markdown("---")
@@ -556,6 +645,9 @@ with st.sidebar:
         st.session_state.fixture_list = []
         st.session_state.total_sub_count = 0
         st.session_state.msb_count = 1
+        # Reset trunking category zone lists
+        for cat in st.session_state.trunking_categories:
+            st.session_state.trunking_categories[cat]["zones"] = []
         st.rerun()
 
 # --- 5. MAIN PAGE ---
@@ -597,7 +689,7 @@ if st.session_state.project:
     expected_cols = ["description", "type", "area_m2", "power_w_m2", "light_w_m2", 
                      "total_power_kw", "total_apparent_kva", "sockets", "isolator", 
                      "breaker_rating", "breaker_type", "cable", "lights", 
-                     "light_switches", "num_circuits", "distance_m", "db_count"]
+                     "light_switches", "num_circuits", "distance_m", "db_count", "trunking_category"]
     for col in expected_cols:
         if col not in df.columns:
             if col in ["area_m2", "power_w_m2", "light_w_m2", "sockets", "lights", 
@@ -609,7 +701,7 @@ if st.session_state.project:
     
     display_cols = ["description", "type", "area_m2", "total_power_kw", "total_apparent_kva", 
                     "sockets", "lights", "isolator", "breaker_rating", "breaker_type", 
-                    "cable", "distance_m", "db_count", "num_circuits"]
+                    "cable", "distance_m", "db_count", "num_circuits", "trunking_category"]
     df_display = df[display_cols]
     st.dataframe(df_display, use_container_width=True, hide_index=True)
     
@@ -680,6 +772,7 @@ if st.session_state.project:
             "V-Drop %": round(vd_pct, 2),
             "VD Status": vd_status,
             "DBs": db_cnt,
+            "Trunking Cat": row.get("trunking_category", ""),
             "Man-hrs": round(hrs, 1),
         })
     
@@ -748,49 +841,67 @@ else:
             st.error("❌ Room too small. Adjust dimensions.")
     room_check = {"length": room_len, "width": room_wid, "status": "OK" if width_ok and depth_ok else "FAIL"}
 
-# --- 8. CABLE TRUNKING / LADDER SIZING (with spare capacity) ---
-st.header("📦 Cable Trunking / Ladder Sizing")
+# --- 8. CABLE TRUNKING / LADDER SIZING BY SERVICE (NEW) ---
+st.header("📦 Cable Trunking / Ladder Sizing by Service")
 
 if st.session_state.project and not df.empty:
-    total_cable_area = 0
-    for idx, row in df.iterrows():
-        circuits = row["num_circuits"]
-        cable_size = row["cable"].split()[0] if isinstance(row["cable"], str) else ""
-        if cable_size in CABLE_AREA:
-            area_per_cable = CABLE_AREA[cable_size]
-            total_cable_area += area_per_cable * circuits
+    # Prepare per-category calculations
+    category_recommendations = {}
     
-    spare_pct = st.session_state.get('trunking_spare', 20)
+    for cat_name, cat_data in st.session_state.trunking_categories.items():
+        # Get all zones assigned to this category
+        cat_df = df[df["trunking_category"] == cat_name]
+        if cat_df.empty:
+            continue
+        
+        total_cable_area = 0
+        for idx, row in cat_df.iterrows():
+            circuits = row["num_circuits"]
+            cable_size = row["cable"].split()[0] if isinstance(row["cable"], str) else ""
+            if cable_size in CABLE_AREA:
+                area_per_cable = CABLE_AREA[cable_size]
+                total_cable_area += area_per_cable * circuits
+        
+        spare_pct = cat_data.get("spare_pct", 20)
+        rec_text, trunk_area, req_area, fill_factor = recommend_trunking(total_cable_area, spare_pct)
+        
+        category_recommendations[cat_name] = {
+            "total_area": total_cable_area,
+            "spare_pct": spare_pct,
+            "fill_factor": fill_factor,
+            "required_area": req_area if req_area else 0,
+            "recommendation": rec_text,
+            "zone_count": len(cat_df)
+        }
     
-    trunking_rec = {}
-    trunking_rec['total_area'] = total_cable_area
-    trunking_rec['spare_pct'] = spare_pct
-    rec_text, trunk_area, req_area, fill_factor = recommend_trunking(total_cable_area, spare_pct)
-    trunking_rec['recommendation'] = rec_text
-    trunking_rec['required_area'] = req_area if req_area else 0
-    trunking_rec['fill_factor'] = fill_factor
-    
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        st.metric("Total cable cross‑section", f"{total_cable_area:.0f} mm²")
-        st.metric(f"Spare capacity", f"{spare_pct}%")
-        st.metric(f"Effective fill factor", f"{fill_factor*100:.1f}%")
-        st.metric("Required trunking area", f"{req_area:.0f} mm²" if req_area else "N/A")
-    with col_t2:
-        st.success(f"**Recommended trunking:** {rec_text}")
-        st.markdown("**Custom trunking check**")
-        cust_w = st.number_input("Width (mm)", min_value=50, value=100, step=10, key="cust_w")
-        cust_h = st.number_input("Height (mm)", min_value=50, value=50, step=10, key="cust_h")
-        cust_area = cust_w * cust_h
-        fill_pct = (total_cable_area / cust_area) * 100 if cust_area > 0 else 0
-        st.write(f"Fill ratio: {fill_pct:.1f}% (max {fill_factor*100:.1f}%)")
-        if fill_pct <= fill_factor * 100:
-            st.success("✅ Acceptable")
-        else:
-            st.error("❌ Overfilled – increase trunking size")
+    # Display recommendations per category
+    if category_recommendations:
+        for cat_name, rec in category_recommendations.items():
+            with st.expander(f"📁 {cat_name} ({rec['zone_count']} zones)", expanded=True):
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    st.metric("Total cable cross‑section", f"{rec['total_area']:.0f} mm²")
+                    st.metric("Spare capacity", f"{rec['spare_pct']}%")
+                    st.metric("Effective fill factor", f"{rec['fill_factor']*100:.1f}%")
+                    st.metric("Required trunking area", f"{rec['required_area']:.0f} mm²")
+                with col_c2:
+                    st.success(f"**Recommended trunking:** {rec['recommendation']}")
+                    # Custom check
+                    st.markdown("**Custom trunking check**")
+                    cust_w = st.number_input(f"Width (mm)", min_value=50, value=100, step=10, key=f"cust_w_{cat_name}")
+                    cust_h = st.number_input(f"Height (mm)", min_value=50, value=50, step=10, key=f"cust_h_{cat_name}")
+                    cust_area = cust_w * cust_h
+                    fill_pct = (rec['total_area'] / cust_area) * 100 if cust_area > 0 else 0
+                    st.write(f"Fill ratio: {fill_pct:.1f}% (max {rec['fill_factor']*100:.1f}%)")
+                    if fill_pct <= rec['fill_factor'] * 100:
+                        st.success("✅ Acceptable")
+                    else:
+                        st.error("❌ Overfilled – increase trunking size")
+    else:
+        st.info("No zones assigned to any trunking category.")
 else:
     st.info("Add project data to calculate trunking requirements.")
-    trunking_rec = {"recommendation": "N/A", "total_area": 0, "required_area": 0, "spare_pct": 20, "fill_factor": 0.45}
+    category_recommendations = {}
 
 # --- 9. CABLE SIZING TOOL ---
 st.header("⚡ Cable Sizing Tool")
@@ -859,7 +970,7 @@ with col_e1:
 with col_e2:
     if st.button("📄 Generate PDF Report", key="pdf_btn"):
         if not df.empty and 'room_len' in st.session_state:
-            pdf_bytes = generate_pdf(df, panel_req, room_check, st.session_state.project_metadata, trunking_rec)
+            pdf_bytes = generate_pdf(df, panel_req, room_check, st.session_state.project_metadata, category_recommendations)
             st.download_button("Confirm Download PDF", data=pdf_bytes, file_name="electrical_report.pdf", mime="application/pdf", key="download_pdf")
         else:
             st.warning("Add project data and define room dimensions first.")
