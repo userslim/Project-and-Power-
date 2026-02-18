@@ -2,16 +2,20 @@ import streamlit as st
 import math
 import pandas as pd
 
-st.set_page_config(page_title="Master Electrical & Project Suite", layout="wide")
+st.set_page_config(page_title="Master Electrical Project Suite", layout="wide")
 
-# --- 1. ENHANCED ENGINEERING DATABASE ---
-# Data derived from "Power Load Calculation.xlsx"
-RES_APPLIANCES = [
-    "Refrigerator (150W)", "Air Conditioner (2000W)", 
-    "10x LED Lights (100W total)", "Television (100W)", 
-    "Washing Machine (500W)", "Water Heater (3000W)"
-]
+# --- 1. DATA FROM RESIDENTIAL LOAD CALCULATION ---
+# Sourced from uploaded file
+RES_ITEMS = {
+    "Refrigerator": 150,
+    "Air Conditioner": 2000,
+    "LED Lights (10 nos)": 100,
+    "Television": 100,
+    "Washing Machine": 500,
+    "Water Heater": 3000
+}
 
+# [Power W/m2, Light W/m2, Target Lux, Sqm/Socket, ISO, Cable, DB_Cap_sqm, mV_A_m]
 TECH_REFS = {
     "Residential": [60, 8, 300, 15, "20A DP", "2.5mm² 3C", 500, 18.0],
     "Shopping Center": [85, 15, 500, 20, "32A TP", "4.0mm² 5C", 800, 11.0],
@@ -28,7 +32,7 @@ if 'project' not in st.session_state:
 
 st.title("⚡ Master Electrical Design & Project Suite")
 
-# --- 2. SIDEBAR: DESIGNER INPUTS & DONATION ---
+# --- 2. SIDEBAR: INPUTS & DONATION ---
 with st.sidebar:
     st.header("🏢 Site Parameters")
     z_name = st.text_input("Area Description", "Level 1")
@@ -36,6 +40,7 @@ with st.sidebar:
     z_area = st.number_input("Floor Area (m²)", min_value=1.0, value=100.0)
     z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0)
     
+    # Calculate suggested DBs based on area
     sug_db = math.ceil(z_area / TECH_REFS[z_type][6])
     z_db = st.number_input("Sub-boards (DBs)", min_value=1, value=sug_db)
     
@@ -53,16 +58,17 @@ with st.sidebar:
         })
     
     st.divider()
-    # --- PAYPAL DONATION SECTION ---
     st.header("☕ Support Development")
-    st.write("If this app helps your workflow, consider supporting its development!")
-    # Replace the 'YOUR_PAYPAL_EMAIL' with your actual PayPal email or link
-    paypal_link = "https://www.paypal.com/donate?business=YOUR_PAYPAL_EMAIL&currency_code=USD"
+    st.write("Help keep this tool updated!")
+    
+    # PayPal Donation Integration
+    # REPLACE 'YOUR_PAYPAL_EMAIL' with your actual email
+    paypal_url = "https://www.paypal.com/donate?business=YOUR_PAYPAL_EMAIL&currency_code=USD"
     st.markdown(f'''
-        <a href="{paypal_link}" target="_blank">
-            <img src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif" border="0" name="submit" title="PayPal - The safer, easier way to pay online!" alt="Donate with PayPal button" />
+        <a href="{paypal_url}" target="_blank">
+            <img src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif" border="0" title="Donate with PayPal" alt="Donate" />
         </a>
-    ''', unsafe_allow_value=True)
+    ''', unsafe_allow_html=True)
 
 # --- 3. CALCULATION ENGINE ---
 if st.session_state.project:
@@ -71,16 +77,20 @@ if st.session_state.project:
 
     for item in st.session_state.project:
         ref = TECH_REFS[item['Type']]
+        # Calculation based on area wattage + EV provision
         total_kw = ((item['Area'] * (ref[0] + ref[1])) / 1000) + item['EV']
         md_kw = total_kw * 0.8
         total_md += md_kw
         
+        # Provision quantities
         sockets = math.ceil(item['Area'] / ref[3])
         lights = math.ceil((ref[2] * item['Area']) / (3200 * 0.8 * 0.7))
         
+        # Technical checks
         ib = (md_kw * 1000) / (1.732 * 400 * 0.85)
         vd_pct = ((ref[7] * ib * item['Dist']) / 1000 / 400) * 100
         
+        # Labor and Budget
         hrs = (sockets * 0.5) + (lights * 0.8) + (item['Dist'] * 0.05) + (item['DBs'] * 5)
         total_hrs += hrs
         cost = (item['Dist'] * 15) + (sockets * 30) + (lights * 60) + (item['DBs'] * 1500)
@@ -93,37 +103,38 @@ if st.session_state.project:
         })
 
     df = pd.DataFrame(report)
-    st.subheader("📋 Provisioning & Technical Report")
+    st.subheader("📋 Engineering Provisioning Schedule")
     st.table(df)
 
-    # --- 4. PROJECT MANAGEMENT & T&C ---
+    # --- 4. PROJECT DASHBOARD ---
     st.divider()
     days = math.ceil(total_hrs / (manpower * 8))
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Max Demand", f"{total_md:.1f} kW")
-    c2.metric("Project Cost", f"${total_cost:,.2f}")
-    c3.metric("Duration", f"{days} Working Days")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Building Max Demand", f"{total_md:.1f} kW")
+    m2.metric("Total Project Cost", f"${total_cost:,.2f}")
+    m3.metric("Installation Timeline", f"{days} Days")
 
-    col_left, col_right = st.columns(2)
-    with col_left:
+    col1, col2 = st.columns(2)
+    with col1:
         st.subheader("🚧 Phase Breakdown")
         st.info(f"**First Fix**: {math.ceil(days*0.4)}d | **Second Fix**: {math.ceil(days*0.4)}d | **T&C**: {math.ceil(days*0.2)}d")
+        
         if any(d['Type'] == "Residential" for d in st.session_state.project):
-            st.write("**Residential Provisioning (Based on Load Sheet):**")
-            for app in RES_APPLIANCES: st.write(f"- {app}")
-    
-    with col_right:
-        st.subheader("🔍 Testing & Commissioning Checklist")
-        st.checkbox("Visual Inspection (Cabling & Terminations)")
-        st.checkbox("Continuity of Protective Conductors")
+            st.write("**Residential Load Profiles:**")
+            for app, watts in RES_ITEMS.items():
+                st.write(f"- {app}: {watts}W")
+
+    with col2:
+        st.subheader("🔍 Mandatory Site Tests")
+        st.checkbox("Visual Inspection of Containment")
+        st.checkbox("Continuity of Ring/Radial Circuits")
         st.checkbox("Insulation Resistance Test (>1 MΩ)")
-        st.checkbox("Polarity Test")
-        st.checkbox("Earth Fault Loop Impedance (EFLI)")
-        st.checkbox("RCD Operation Test")
+        st.checkbox("Polarity & Phase Rotation")
+        st.checkbox("RCD/RCCB Trip Time Test")
 
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Export Project Schedule (CSV)", data=csv, file_name="electrical_master_plan.csv")
+    st.download_button("📥 Export Report (CSV)", data=csv, file_name="site_provision_plan.csv")
     
-    if st.button("🗑️ Reset All"):
+    if st.button("🗑️ Clear All Data"):
         st.session_state.project = []
         st.rerun()
