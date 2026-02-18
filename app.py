@@ -5,7 +5,6 @@ import pandas as pd
 st.set_page_config(page_title="Master Electrical Project Suite", layout="wide")
 
 # --- 1. DATA FROM RESIDENTIAL LOAD CALCULATION ---
-# Sourced from uploaded file
 RES_ITEMS = {
     "Refrigerator": 150,
     "Air Conditioner": 2000,
@@ -22,6 +21,10 @@ TECH_REFS = {
     "Data Center": [1200, 10, 300, 100, "63A TP", "16mm² 5C", 300, 2.8],
     "Polyclinic": [65, 12, 500, 10, "20A DP", "2.5mm² 3C", 400, 18.0],
     "Hospital": [110, 15, 600, 8, "32A TP", "6.0mm² 5C", 400, 7.3],
+    "Hawker Center": [180, 12, 300, 5, "32A SP", "4.0mm² 3C", 300, 11.0],
+    "Market (Wet)": [45, 10, 200, 25, "20A DP", "2.5mm² 3C", 600, 18.0],
+    "Factory (Light)": [85, 12, 400, 15, "32A TP", "4.0mm² 5C", 1000, 11.0],
+    "Manufacturing": [450, 15, 500, 30, "63A TP", "25mm² 5C", 1000, 1.8],
     "MRT Station (UG)": [220, 18, 500, 50, "63A TP", "35mm² 5C", 400, 1.35],
     "MRT Station (AG)": [120, 12, 400, 50, "32A TP", "10mm² 5C", 600, 4.4],
     "MSCP (Carpark)": [15, 5, 150, 100, "32A TP", "6.0mm² 5C", 1200, 7.3]
@@ -40,7 +43,6 @@ with st.sidebar:
     z_area = st.number_input("Floor Area (m²)", min_value=1.0, value=100.0)
     z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0)
     
-    # Calculate suggested DBs based on area
     sug_db = math.ceil(z_area / TECH_REFS[z_type][6])
     z_db = st.number_input("Sub-boards (DBs)", min_value=1, value=sug_db)
     
@@ -59,10 +61,6 @@ with st.sidebar:
     
     st.divider()
     st.header("☕ Support Development")
-    st.write("Help keep this tool updated!")
-    
-    # PayPal Donation Integration
-    # REPLACE 'YOUR_PAYPAL_EMAIL' with your actual email
     paypal_url = "https://www.paypal.com/donate?business=YOUR_PAYPAL_EMAIL&currency_code=USD"
     st.markdown(f'''
         <a href="{paypal_url}" target="_blank">
@@ -77,29 +75,35 @@ if st.session_state.project:
 
     for item in st.session_state.project:
         ref = TECH_REFS[item['Type']]
-        # Calculation based on area wattage + EV provision
-        total_kw = ((item['Area'] * (ref[0] + ref[1])) / 1000) + item['EV']
+        p_density = ref[0]
+        l_density = ref[1]
+        
+        total_kw = ((item['Area'] * (p_density + l_density)) / 1000) + item['EV']
         md_kw = total_kw * 0.8
         total_md += md_kw
         
-        # Provision quantities
         sockets = math.ceil(item['Area'] / ref[3])
         lights = math.ceil((ref[2] * item['Area']) / (3200 * 0.8 * 0.7))
         
-        # Technical checks
         ib = (md_kw * 1000) / (1.732 * 400 * 0.85)
         vd_pct = ((ref[7] * ib * item['Dist']) / 1000 / 400) * 100
         
-        # Labor and Budget
         hrs = (sockets * 0.5) + (lights * 0.8) + (item['Dist'] * 0.05) + (item['DBs'] * 5)
         total_hrs += hrs
         cost = (item['Dist'] * 15) + (sockets * 30) + (lights * 60) + (item['DBs'] * 1500)
         total_cost += cost
 
         report.append({
-            "Zone": item['Name'], "Type": item['Type'], "Load (kW)": round(total_kw, 1),
-            "Sockets": sockets, "Lights": lights, "Cable": ref[5], 
-            "V-Drop %": round(vd_pct, 2), "Status": "✅ Pass" if vd_pct <= 4 else "⚠️ Resize"
+            "Zone": item['Name'], 
+            "Type": item['Type'],
+            "P-Density (W/m²)": p_density,
+            "L-Density (W/m²)": l_density,
+            "Load (kW)": round(total_kw, 1),
+            "Sockets": sockets, 
+            "Lights": lights, 
+            "Cable": ref[5], 
+            "V-Drop %": round(vd_pct, 2), 
+            "Status": "✅ Pass" if vd_pct <= 4 else "⚠️ Resize"
         })
 
     df = pd.DataFrame(report)
@@ -120,17 +124,15 @@ if st.session_state.project:
         st.info(f"**First Fix**: {math.ceil(days*0.4)}d | **Second Fix**: {math.ceil(days*0.4)}d | **T&C**: {math.ceil(days*0.2)}d")
         
         if any(d['Type'] == "Residential" for d in st.session_state.project):
-            st.write("**Residential Load Profiles:**")
+            st.write("**Residential Reference (from Load Sheet):**")
             for app, watts in RES_ITEMS.items():
                 st.write(f"- {app}: {watts}W")
 
     with col2:
-        st.subheader("🔍 Mandatory Site Tests")
-        st.checkbox("Visual Inspection of Containment")
-        st.checkbox("Continuity of Ring/Radial Circuits")
-        st.checkbox("Insulation Resistance Test (>1 MΩ)")
-        st.checkbox("Polarity & Phase Rotation")
-        st.checkbox("RCD/RCCB Trip Time Test")
+        st.subheader("🔍 Reference Standards Table")
+        ref_df = pd.DataFrame.from_dict(TECH_REFS, orient='index', 
+                                        columns=['P-Density', 'L-Density', 'Lux', 'Sqm/Socket', 'ISO', 'Cable', 'DB_Cap', 'mV/A/m'])
+        st.dataframe(ref_df[['P-Density', 'L-Density', 'Lux']])
 
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Export Report (CSV)", data=csv, file_name="site_provision_plan.csv")
