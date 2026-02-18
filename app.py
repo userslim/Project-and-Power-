@@ -61,7 +61,7 @@ with st.sidebar:
     
     st.divider()
     st.header("☕ Support Development")
-    paypal_url = "https://www.paypal.com/donate?business=YOUR_PAYPAL_EMAIL&currency_code=USD"
+    paypal_url = "https://www.paypal.com/ncp/payment/LS3V92VHLSTZE"
     st.markdown(f'''
         <a href="{paypal_url}" target="_blank">
             <img src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif" border="0" title="Donate with PayPal" alt="Donate" />
@@ -140,3 +140,4 @@ if st.session_state.project:
     if st.button("🗑️ Clear All Data"):
         st.session_state.project = []
         st.rerun()
+
