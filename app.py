@@ -1,167 +1,381 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime
 import os
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from dotenv import load_dotenv
-import paypalrestsdk
 import uuid
+import base64
+import json
 
 # Load environment variables
 load_dotenv()
 
-app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-change-this')
+# Page configuration
+st.set_page_config(
+    page_title="Streamlit PayPal Integration",
+    page_icon="💰",
+    layout="wide"
+)
 
-# Configure PayPal
-paypalrestsdk.configure({
-    "mode": os.getenv('PAYPAL_MODE', 'sandbox'),  # sandbox or live
-    "client_id": os.getenv('PAYPAL_CLIENT_ID'),
-    "client_secret": os.getenv('PAYPAL_CLIENT_SECRET')
-})
+# Initialize session state
+if 'cart' not in st.session_state:
+    st.session_state.cart = []
+if 'orders' not in st.session_state:
+    st.session_state.orders = []
+if 'payment_success' not in st.session_state:
+    st.session_state.payment_success = False
 
-# Store created payments temporarily (in production, use a database)
-payments = {}
+# Product catalog
+PRODUCTS = [
+    {
+        "id": "prod_001",
+        "name": "Basic Plan",
+        "price": 9.99,
+        "description": "Perfect for individuals starting out",
+        "features": ["Basic analytics", "5 projects", "Email support", "1 user"],
+        "icon": "📊",
+        "color": "#4CAF50"
+    },
+    {
+        "id": "prod_002",
+        "name": "Pro Plan",
+        "price": 29.99,
+        "description": "For professionals and small teams",
+        "features": ["Advanced analytics", "Unlimited projects", "Priority support", "5 users", "API access"],
+        "icon": "🚀",
+        "color": "#2196F3"
+    },
+    {
+        "id": "prod_003",
+        "name": "Enterprise Plan",
+        "price": 99.99,
+        "description": "Full-featured for large organizations",
+        "features": ["Enterprise analytics", "Unlimited everything", "24/7 phone support", "Unlimited users", "Custom integrations", "SLA guarantee"],
+        "icon": "🏢",
+        "color": "#9C27B0"
+    }
+]
 
-@app.route('/')
-def index():
-    """Home page with product listing"""
-    products = [
-        {'id': 'prod1', 'name': 'Basic Plan', 'price': '9.99', 'description': 'Basic features for individuals'},
-        {'id': 'prod2', 'name': 'Pro Plan', 'price': '29.99', 'description': 'Advanced features for professionals'},
-        {'id': 'prod3', 'name': 'Enterprise Plan', 'price': '99.99', 'description': 'Complete solution for businesses'}
-    ]
-    return render_template('index.html', products=products)
+# Custom CSS
+st.markdown("""
+    <style>
+    /* Main container */
+    .main-header {
+        text-align: center;
+        padding: 2rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
+    
+    /* Product cards */
+    .product-card {
+        padding: 1.5rem;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+        margin-bottom: 1rem;
+        transition: transform 0.3s, box-shadow 0.3s;
+        background: white;
+    }
+    
+    .product-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+    }
+    
+    .product-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+    }
+    
+    .product-name {
+        font-size: 1.5rem;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+    }
+    
+    .product-price {
+        font-size: 2rem;
+        color: #2ecc71;
+        font-weight: bold;
+        margin: 1rem 0;
+    }
+    
+    .product-description {
+        color: #666;
+        margin-bottom: 1rem;
+    }
+    
+    .feature-list {
+        list-style-type: none;
+        padding: 0;
+        margin: 1rem 0;
+    }
+    
+    .feature-list li {
+        padding: 0.3rem 0;
+        color: #555;
+    }
+    
+    .feature-list li:before {
+        content: "✓ ";
+        color: #2ecc71;
+        font-weight: bold;
+    }
+    
+    /* PayPal button */
+    .paypal-button {
+        background: #0070ba;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 16px;
+        width: 100%;
+        transition: background 0.3s;
+    }
+    
+    .paypal-button:hover {
+        background: #005ea6;
+    }
+    
+    /* Success message */
+    .success-message {
+        background: #d4edda;
+        color: #155724;
+        padding: 1rem;
+        border-radius: 5px;
+        border: 1px solid #c3e6cb;
+        margin: 1rem 0;
+    }
+    
+    /* Cart sidebar */
+    .cart-item {
+        padding: 0.5rem;
+        border-bottom: 1px solid #eee;
+    }
+    
+    .cart-total {
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: #2c3e50;
+        margin-top: 1rem;
+    }
+    
+    /* Stats cards */
+    .stat-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        text-align: center;
+    }
+    
+    .stat-number {
+        font-size: 2rem;
+        font-weight: bold;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+        opacity: 0.9;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-@app.route('/create-payment', methods=['POST'])
-def create_payment():
-    """Create a PayPal payment and redirect to approval URL"""
-    try:
-        product_id = request.form.get('product_id')
-        product_name = request.form.get('product_name')
-        product_price = request.form.get('product_price')
+# Sidebar - Shopping Cart
+with st.sidebar:
+    st.markdown("### 🛒 Shopping Cart")
+    
+    if st.session_state.cart:
+        for idx, item in enumerate(st.session_state.cart):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.write(f"**{item['name']}**")
+            with col2:
+                st.write(f"${item['price']:.2f}")
+            with col3:
+                if st.button("❌", key=f"remove_{idx}"):
+                    st.session_state.cart.pop(idx)
+                    st.rerun()
         
-        # Generate unique invoice number
+        total = sum(item['price'] for item in st.session_state.cart)
+        st.markdown(f"### Total: ${total:.2f}")
+        
+        if st.button("🔄 Clear Cart", use_container_width=True):
+            st.session_state.cart = []
+            st.rerun()
+    else:
+        st.info("Your cart is empty. Browse products to add items.")
+    
+    st.markdown("---")
+    
+    # Quick stats
+    if st.session_state.orders:
+        total_spent = sum(order['amount'] for order in st.session_state.orders)
+        st.markdown("### 📊 Your Stats")
+        st.markdown(f"**Orders:** {len(st.session_state.orders)}")
+        st.markdown(f"**Total Spent:** ${total_spent:.2f}")
+
+# Main content
+st.markdown("""
+    <div class="main-header">
+        <h1>💰 Streamlit PayPal Integration</h1>
+        <p>Complete payment solution for your Streamlit apps</p>
+    </div>
+""", unsafe_allow_html=True)
+
+# Success message
+if st.session_state.payment_success:
+    st.markdown("""
+        <div class="success-message">
+            <h3>✓ Payment Successful!</h3>
+            <p>Thank you for your purchase. You will receive a confirmation email shortly.</p>
+        </div>
+    """, unsafe_allow_html=True)
+    st.session_state.payment_success = False
+
+# Product display
+st.markdown("## 📦 Our Products")
+
+cols = st.columns(len(PRODUCTS))
+
+for idx, product in enumerate(PRODUCTS):
+    with cols[idx]:
+        st.markdown(f"""
+            <div class="product-card" style="border-top: 5px solid {product['color']}">
+                <div class="product-icon">{product['icon']}</div>
+                <div class="product-name">{product['name']}</div>
+                <div class="product-description">{product['description']}</div>
+                <div class="product-price">${product['price']:.2f}</div>
+        """, unsafe_allow_html=True)
+        
+        # Features
+        st.markdown("<ul class='feature-list'>", unsafe_allow_html=True)
+        for feature in product['features']:
+            st.markdown(f"<li>{feature}</li>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        # Add to cart button
+        if st.button(f"➕ Add to Cart", key=f"add_{product['id']}"):
+            st.session_state.cart.append({
+                "id": product['id'],
+                "name": product['name'],
+                "price": product['price']
+            })
+            st.success(f"Added {product['name']} to cart!")
+            st.rerun()
+
+# Checkout section
+if st.session_state.cart:
+    st.markdown("---")
+    st.markdown("## 💳 Checkout")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("### Payment Method")
+        
+        # Payment method selection
+        payment_method = st.radio(
+            "Select payment method:",
+            ["PayPal", "Credit Card (via PayPal)", "PayPal Balance"],
+            horizontal=True
+        )
+        
+        st.markdown("### Order Summary")
+        for item in st.session_state.cart:
+            st.write(f"• {item['name']} - ${item['price']:.2f}")
+        
+        total = sum(item['price'] for item in st.session_state.cart)
+        st.markdown(f"**Total: ${total:.2f}**")
+    
+    with col2:
+        st.markdown("### Complete Payment")
+        
+        # Generate PayPal link
         invoice_number = f"INV-{uuid.uuid4().hex[:8].upper()}"
         
-        # Create payment object
-        payment = paypalrestsdk.Payment({
-            "intent": "sale",
-            "payer": {
-                "payment_method": "paypal"
-            },
-            "redirect_urls": {
-                "return_url": url_for('execute_payment', _external=True),
-                "cancel_url": url_for('cancel_payment', _external=True)
-            },
-            "transactions": [{
-                "item_list": {
-                    "items": [{
-                        "name": product_name,
-                        "sku": product_id,
-                        "price": product_price,
-                        "currency": "USD",
-                        "quantity": 1
-                    }]
-                },
-                "amount": {
-                    "total": product_price,
-                    "currency": "USD"
-                },
-                "description": f"Payment for {product_name}",
-                "invoice_number": invoice_number
-            }]
-        })
+        # PayPal button HTML
+        paypal_html = f"""
+        <div style="text-align: center;">
+            <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+                <input type="hidden" name="cmd" value="_cart">
+                <input type="hidden" name="upload" value="1">
+                <input type="hidden" name="business" value="{os.getenv('PAYPAL_BUSINESS_EMAIL', 'your-merchant@example.com')}">
+                <input type="hidden" name="currency_code" value="USD">
+                <input type="hidden" name="return" value="{os.getenv('APP_URL', 'http://localhost:8501')}/?success=true">
+                <input type="hidden" name="cancel_return" value="{os.getenv('APP_URL', 'http://localhost:8501')}/?cancel=true">
+                <input type="hidden" name="invoice" value="{invoice_number}">
+        """
         
-        # Create payment
-        if payment.create():
-            # Store payment info temporarily
-            payments[payment.id] = {
-                'product_id': product_id,
-                'product_name': product_name,
-                'price': product_price,
-                'invoice': invoice_number,
-                'status': 'created'
+        # Add cart items to PayPal form
+        for idx, item in enumerate(st.session_state.cart, 1):
+            paypal_html += f"""
+                <input type="hidden" name="item_name_{idx}" value="{item['name']}">
+                <input type="hidden" name="amount_{idx}" value="{item['price']}">
+                <input type="hidden" name="quantity_{idx}" value="1">
+            """
+        
+        paypal_html += """
+                <button type="submit" class="paypal-button">
+                    <img src="https://www.paypalobjects.com/webstatic/en_US/i/buttons/checkout-logo-large.png" alt="Check out with PayPal" style="height: 30px;">
+                </button>
+            </form>
+            
+            <div style="margin-top: 20px;">
+                <img src="https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_37x23.jpg" alt="PayPal">
+                <p style="font-size: 0.8rem; color: #666;">
+                    Secure payment processed by PayPal<br>
+                    <a href="#" onclick="alert('Demo mode - No actual payment will be processed!')">Test Payment</a>
+                </p>
+            </div>
+        </div>
+        """
+        
+        st.markdown(paypal_html, unsafe_allow_html=True)
+        
+        # Demo payment button
+        if st.button("💰 Demo Payment (Test Mode)", use_container_width=True):
+            # Simulate successful payment
+            order = {
+                "id": invoice_number,
+                "items": st.session_state.cart.copy(),
+                "amount": total,
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "completed"
             }
-            
-            # Extract approval URL
-            for link in payment.links:
-                if link.rel == "approval_url":
-                    return redirect(link.href)
-        else:
-            return render_template('payment.html', error=f"Payment creation failed: {payment.error}")
-            
-    except Exception as e:
-        return render_template('payment.html', error=str(e))
+            st.session_state.orders.append(order)
+            st.session_state.cart = []
+            st.session_state.payment_success = True
+            st.rerun()
 
-@app.route('/execute-payment')
-def execute_payment():
-    """Execute payment after user approval on PayPal"""
-    payment_id = request.args.get('paymentId')
-    payer_id = request.args.get('PayerID')
+# Payment history section
+if st.session_state.orders:
+    st.markdown("---")
+    st.markdown("## 📋 Recent Orders")
     
-    if not payment_id or not payer_id:
-        return redirect(url_for('index'))
+    # Convert orders to DataFrame for display
+    orders_data = []
+    for order in st.session_state.orders[-5:]:  # Show last 5 orders
+        orders_data.append({
+            "Order ID": order['id'],
+            "Items": ", ".join([item['name'] for item in order['items']]),
+            "Amount": f"${order['amount']:.2f}",
+            "Date": order['date'],
+            "Status": order['status']
+        })
     
-    # Execute the payment
-    payment = paypalrestsdk.Payment.find(payment_id)
-    
-    if payment.execute({"payer_id": payer_id}):
-        # Payment successful
-        payment_info = payments.get(payment_id, {})
-        
-        # In production, save to database here
-        payment_info['status'] = 'completed'
-        payment_info['paypal_payment_id'] = payment_id
-        payment_info['payer_id'] = payer_id
-        
-        return render_template('success.html', 
-                             payment_info=payment_info,
-                             transaction_id=payment_id)
-    else:
-        return render_template('payment.html', 
-                             error=f"Payment execution failed: {payment.error}")
+    df = pd.DataFrame(orders_data)
+    st.dataframe(df, use_container_width=True)
 
-@app.route('/cancel-payment')
-def cancel_payment():
-    """Handle payment cancellation"""
-    payment_id = request.args.get('paymentId')
-    
-    if payment_id and payment_id in payments:
-        payments[payment_id]['status'] = 'cancelled'
-    
-    return render_template('payment.html', 
-                         message="Payment was cancelled. No charges were made.")
-
-@app.route('/payment-status/<payment_id>')
-def payment_status(payment_id):
-    """Check payment status"""
-    if payment_id in payments:
-        return jsonify(payments[payment_id])
-    return jsonify({'error': 'Payment not found'}), 404
-
-@app.route('/donate')
-def donate():
-    """Simple donation page with PayPal button"""
-    paypal_dict = {
-        "business": "your-merchant-email@example.com",  # Your PayPal merchant email
-        "amount": "10.00",
-        "item_name": "Donation",
-        "currency_code": "USD",
-        "no_shipping": "1",
-        "return": url_for('donation_success', _external=True),
-        "cancel_return": url_for('donation_cancel', _external=True),
-    }
-    return render_template('donate.html', paypal_dict=paypal_dict)
-
-@app.route('/donation-success')
-def donation_success():
-    """Donation success page"""
-    return render_template('success.html', 
-                         message="Thank you for your donation!")
-
-@app.route('/donation-cancel')
-def donation_cancel():
-    """Donation cancellation page"""
-    return render_template('payment.html', 
-                         message="Donation cancelled. Thank you for considering!")
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+# Footer
+st.markdown("---")
+st.markdown("""
+    <div style="text-align: center; color: #666;">
+        <p>🔒 All payments are securely processed by PayPal. We never store your payment information.</p>
+        <p>© 2024 Streamlit PayPal Integration Demo</p>
+    </div>
+""", unsafe_allow_html=True)
