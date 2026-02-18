@@ -1,381 +1,129 @@
 import streamlit as st
+import math
 import pandas as pd
-from datetime import datetime
-import os
-from dotenv import load_dotenv
-import uuid
-import base64
-import json
 
-# Load environment variables
-load_dotenv()
+st.set_page_config(page_title="Master Electrical & Project Suite", layout="wide")
 
-# Page configuration
-st.set_page_config(
-    page_title="Streamlit PayPal Integration",
-    page_icon="💰",
-    layout="wide"
-)
-
-# Initialize session state
-if 'cart' not in st.session_state:
-    st.session_state.cart = []
-if 'orders' not in st.session_state:
-    st.session_state.orders = []
-if 'payment_success' not in st.session_state:
-    st.session_state.payment_success = False
-
-# Product catalog
-PRODUCTS = [
-    {
-        "id": "prod_001",
-        "name": "Basic Plan",
-        "price": 9.99,
-        "description": "Perfect for individuals starting out",
-        "features": ["Basic analytics", "5 projects", "Email support", "1 user"],
-        "icon": "📊",
-        "color": "#4CAF50"
-    },
-    {
-        "id": "prod_002",
-        "name": "Pro Plan",
-        "price": 29.99,
-        "description": "For professionals and small teams",
-        "features": ["Advanced analytics", "Unlimited projects", "Priority support", "5 users", "API access"],
-        "icon": "🚀",
-        "color": "#2196F3"
-    },
-    {
-        "id": "prod_003",
-        "name": "Enterprise Plan",
-        "price": 99.99,
-        "description": "Full-featured for large organizations",
-        "features": ["Enterprise analytics", "Unlimited everything", "24/7 phone support", "Unlimited users", "Custom integrations", "SLA guarantee"],
-        "icon": "🏢",
-        "color": "#9C27B0"
-    }
+# --- 1. ENHANCED ENGINEERING DATABASE ---
+# Data derived from "Power Load Calculation.xlsx"
+RES_APPLIANCES = [
+    "Refrigerator (150W)", "Air Conditioner (2000W)", 
+    "10x LED Lights (100W total)", "Television (100W)", 
+    "Washing Machine (500W)", "Water Heater (3000W)"
 ]
 
-# Custom CSS
-st.markdown("""
-    <style>
-    /* Main container */
-    .main-header {
-        text-align: center;
-        padding: 2rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 10px;
-        margin-bottom: 2rem;
-    }
-    
-    /* Product cards */
-    .product-card {
-        padding: 1.5rem;
-        border-radius: 10px;
-        border: 1px solid #e0e0e0;
-        margin-bottom: 1rem;
-        transition: transform 0.3s, box-shadow 0.3s;
-        background: white;
-    }
-    
-    .product-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-    }
-    
-    .product-icon {
-        font-size: 3rem;
-        margin-bottom: 1rem;
-    }
-    
-    .product-name {
-        font-size: 1.5rem;
-        font-weight: bold;
-        margin-bottom: 0.5rem;
-    }
-    
-    .product-price {
-        font-size: 2rem;
-        color: #2ecc71;
-        font-weight: bold;
-        margin: 1rem 0;
-    }
-    
-    .product-description {
-        color: #666;
-        margin-bottom: 1rem;
-    }
-    
-    .feature-list {
-        list-style-type: none;
-        padding: 0;
-        margin: 1rem 0;
-    }
-    
-    .feature-list li {
-        padding: 0.3rem 0;
-        color: #555;
-    }
-    
-    .feature-list li:before {
-        content: "✓ ";
-        color: #2ecc71;
-        font-weight: bold;
-    }
-    
-    /* PayPal button */
-    .paypal-button {
-        background: #0070ba;
-        color: white;
-        border: none;
-        padding: 10px 20px;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 16px;
-        width: 100%;
-        transition: background 0.3s;
-    }
-    
-    .paypal-button:hover {
-        background: #005ea6;
-    }
-    
-    /* Success message */
-    .success-message {
-        background: #d4edda;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 5px;
-        border: 1px solid #c3e6cb;
-        margin: 1rem 0;
-    }
-    
-    /* Cart sidebar */
-    .cart-item {
-        padding: 0.5rem;
-        border-bottom: 1px solid #eee;
-    }
-    
-    .cart-total {
-        font-size: 1.2rem;
-        font-weight: bold;
-        color: #2c3e50;
-        margin-top: 1rem;
-    }
-    
-    /* Stats cards */
-    .stat-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        text-align: center;
-    }
-    
-    .stat-number {
-        font-size: 2rem;
-        font-weight: bold;
-    }
-    
-    .stat-label {
-        font-size: 0.9rem;
-        opacity: 0.9;
-    }
-    </style>
-""", unsafe_allow_html=True)
+TECH_REFS = {
+    "Residential": [60, 8, 300, 15, "20A DP", "2.5mm² 3C", 500, 18.0],
+    "Shopping Center": [85, 15, 500, 20, "32A TP", "4.0mm² 5C", 800, 11.0],
+    "Data Center": [1200, 10, 300, 100, "63A TP", "16mm² 5C", 300, 2.8],
+    "Polyclinic": [65, 12, 500, 10, "20A DP", "2.5mm² 3C", 400, 18.0],
+    "Hospital": [110, 15, 600, 8, "32A TP", "6.0mm² 5C", 400, 7.3],
+    "MRT Station (UG)": [220, 18, 500, 50, "63A TP", "35mm² 5C", 400, 1.35],
+    "MRT Station (AG)": [120, 12, 400, 50, "32A TP", "10mm² 5C", 600, 4.4],
+    "MSCP (Carpark)": [15, 5, 150, 100, "32A TP", "6.0mm² 5C", 1200, 7.3]
+}
 
-# Sidebar - Shopping Cart
+if 'project' not in st.session_state:
+    st.session_state.project = []
+
+st.title("⚡ Master Electrical Design & Project Suite")
+
+# --- 2. SIDEBAR: DESIGNER INPUTS & DONATION ---
 with st.sidebar:
-    st.markdown("### 🛒 Shopping Cart")
+    st.header("🏢 Site Parameters")
+    z_name = st.text_input("Area Description", "Level 1")
+    z_type = st.selectbox("Building Type", list(TECH_REFS.keys()))
+    z_area = st.number_input("Floor Area (m²)", min_value=1.0, value=100.0)
+    z_dist = st.number_input("Distance to MSB (m)", min_value=1.0, value=30.0)
     
-    if st.session_state.cart:
-        for idx, item in enumerate(st.session_state.cart):
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                st.write(f"**{item['name']}**")
-            with col2:
-                st.write(f"${item['price']:.2f}")
-            with col3:
-                if st.button("❌", key=f"remove_{idx}"):
-                    st.session_state.cart.pop(idx)
-                    st.rerun()
-        
-        total = sum(item['price'] for item in st.session_state.cart)
-        st.markdown(f"### Total: ${total:.2f}")
-        
-        if st.button("🔄 Clear Cart", use_container_width=True):
-            st.session_state.cart = []
-            st.rerun()
-    else:
-        st.info("Your cart is empty. Browse products to add items.")
+    sug_db = math.ceil(z_area / TECH_REFS[z_type][6])
+    z_db = st.number_input("Sub-boards (DBs)", min_value=1, value=sug_db)
     
-    st.markdown("---")
+    ev_load = 0
+    if z_type == "MSCP (Carpark)":
+        lots = st.number_input("Total Lots", min_value=1, value=20)
+        ev_load = (lots * 7.4) * 0.20 * 1.20 
     
-    # Quick stats
-    if st.session_state.orders:
-        total_spent = sum(order['amount'] for order in st.session_state.orders)
-        st.markdown("### 📊 Your Stats")
-        st.markdown(f"**Orders:** {len(st.session_state.orders)}")
-        st.markdown(f"**Total Spent:** ${total_spent:.2f}")
+    manpower = st.slider("Electricians on Site", 1, 20, 3)
 
-# Main content
-st.markdown("""
-    <div class="main-header">
-        <h1>💰 Streamlit PayPal Integration</h1>
-        <p>Complete payment solution for your Streamlit apps</p>
-    </div>
-""", unsafe_allow_html=True)
-
-# Success message
-if st.session_state.payment_success:
-    st.markdown("""
-        <div class="success-message">
-            <h3>✓ Payment Successful!</h3>
-            <p>Thank you for your purchase. You will receive a confirmation email shortly.</p>
-        </div>
-    """, unsafe_allow_html=True)
-    st.session_state.payment_success = False
-
-# Product display
-st.markdown("## 📦 Our Products")
-
-cols = st.columns(len(PRODUCTS))
-
-for idx, product in enumerate(PRODUCTS):
-    with cols[idx]:
-        st.markdown(f"""
-            <div class="product-card" style="border-top: 5px solid {product['color']}">
-                <div class="product-icon">{product['icon']}</div>
-                <div class="product-name">{product['name']}</div>
-                <div class="product-description">{product['description']}</div>
-                <div class="product-price">${product['price']:.2f}</div>
-        """, unsafe_allow_html=True)
-        
-        # Features
-        st.markdown("<ul class='feature-list'>", unsafe_allow_html=True)
-        for feature in product['features']:
-            st.markdown(f"<li>{feature}</li>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        # Add to cart button
-        if st.button(f"➕ Add to Cart", key=f"add_{product['id']}"):
-            st.session_state.cart.append({
-                "id": product['id'],
-                "name": product['name'],
-                "price": product['price']
-            })
-            st.success(f"Added {product['name']} to cart!")
-            st.rerun()
-
-# Checkout section
-if st.session_state.cart:
-    st.markdown("---")
-    st.markdown("## 💳 Checkout")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.markdown("### Payment Method")
-        
-        # Payment method selection
-        payment_method = st.radio(
-            "Select payment method:",
-            ["PayPal", "Credit Card (via PayPal)", "PayPal Balance"],
-            horizontal=True
-        )
-        
-        st.markdown("### Order Summary")
-        for item in st.session_state.cart:
-            st.write(f"• {item['name']} - ${item['price']:.2f}")
-        
-        total = sum(item['price'] for item in st.session_state.cart)
-        st.markdown(f"**Total: ${total:.2f}**")
-    
-    with col2:
-        st.markdown("### Complete Payment")
-        
-        # Generate PayPal link
-        invoice_number = f"INV-{uuid.uuid4().hex[:8].upper()}"
-        
-        # PayPal button HTML
-        paypal_html = f"""
-        <div style="text-align: center;">
-            <form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
-                <input type="hidden" name="cmd" value="_cart">
-                <input type="hidden" name="upload" value="1">
-                <input type="hidden" name="business" value="{os.getenv('PAYPAL_BUSINESS_EMAIL', 'your-merchant@example.com')}">
-                <input type="hidden" name="currency_code" value="USD">
-                <input type="hidden" name="return" value="{os.getenv('APP_URL', 'http://localhost:8501')}/?success=true">
-                <input type="hidden" name="cancel_return" value="{os.getenv('APP_URL', 'http://localhost:8501')}/?cancel=true">
-                <input type="hidden" name="invoice" value="{invoice_number}">
-        """
-        
-        # Add cart items to PayPal form
-        for idx, item in enumerate(st.session_state.cart, 1):
-            paypal_html += f"""
-                <input type="hidden" name="item_name_{idx}" value="{item['name']}">
-                <input type="hidden" name="amount_{idx}" value="{item['price']}">
-                <input type="hidden" name="quantity_{idx}" value="1">
-            """
-        
-        paypal_html += """
-                <button type="submit" class="paypal-button">
-                    <img src="https://www.paypalobjects.com/webstatic/en_US/i/buttons/checkout-logo-large.png" alt="Check out with PayPal" style="height: 30px;">
-                </button>
-            </form>
-            
-            <div style="margin-top: 20px;">
-                <img src="https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_37x23.jpg" alt="PayPal">
-                <p style="font-size: 0.8rem; color: #666;">
-                    Secure payment processed by PayPal<br>
-                    <a href="#" onclick="alert('Demo mode - No actual payment will be processed!')">Test Payment</a>
-                </p>
-            </div>
-        </div>
-        """
-        
-        st.markdown(paypal_html, unsafe_allow_html=True)
-        
-        # Demo payment button
-        if st.button("💰 Demo Payment (Test Mode)", use_container_width=True):
-            # Simulate successful payment
-            order = {
-                "id": invoice_number,
-                "items": st.session_state.cart.copy(),
-                "amount": total,
-                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "completed"
-            }
-            st.session_state.orders.append(order)
-            st.session_state.cart = []
-            st.session_state.payment_success = True
-            st.rerun()
-
-# Payment history section
-if st.session_state.orders:
-    st.markdown("---")
-    st.markdown("## 📋 Recent Orders")
-    
-    # Convert orders to DataFrame for display
-    orders_data = []
-    for order in st.session_state.orders[-5:]:  # Show last 5 orders
-        orders_data.append({
-            "Order ID": order['id'],
-            "Items": ", ".join([item['name'] for item in order['items']]),
-            "Amount": f"${order['amount']:.2f}",
-            "Date": order['date'],
-            "Status": order['status']
+    if st.button("➕ Add to Master Schedule"):
+        st.session_state.project.append({
+            "Name": z_name, "Type": z_type, "Area": z_area, 
+            "Dist": z_dist, "DBs": z_db, "EV": ev_load
         })
     
-    df = pd.DataFrame(orders_data)
-    st.dataframe(df, use_container_width=True)
+    st.divider()
+    # --- PAYPAL DONATION SECTION ---
+    st.header("☕ Support Development")
+    st.write("If this app helps your workflow, consider supporting its development!")
+    # Replace the 'YOUR_PAYPAL_EMAIL' with your actual PayPal email or link
+    paypal_link = "https://www.paypal.com/donate?business=YOUR_PAYPAL_EMAIL&currency_code=USD"
+    st.markdown(f'''
+        <a href="{paypal_link}" target="_blank">
+            <img src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif" border="0" name="submit" title="PayPal - The safer, easier way to pay online!" alt="Donate with PayPal button" />
+        </a>
+    ''', unsafe_allow_value=True)
 
-# Footer
-st.markdown("---")
-st.markdown("""
-    <div style="text-align: center; color: #666;">
-        <p>🔒 All payments are securely processed by PayPal. We never store your payment information.</p>
-        <p>© 2024 Streamlit PayPal Integration Demo</p>
-    </div>
-""", unsafe_allow_html=True)
+# --- 3. CALCULATION ENGINE ---
+if st.session_state.project:
+    report = []
+    total_md, total_hrs, total_cost = 0, 0, 0
+
+    for item in st.session_state.project:
+        ref = TECH_REFS[item['Type']]
+        total_kw = ((item['Area'] * (ref[0] + ref[1])) / 1000) + item['EV']
+        md_kw = total_kw * 0.8
+        total_md += md_kw
+        
+        sockets = math.ceil(item['Area'] / ref[3])
+        lights = math.ceil((ref[2] * item['Area']) / (3200 * 0.8 * 0.7))
+        
+        ib = (md_kw * 1000) / (1.732 * 400 * 0.85)
+        vd_pct = ((ref[7] * ib * item['Dist']) / 1000 / 400) * 100
+        
+        hrs = (sockets * 0.5) + (lights * 0.8) + (item['Dist'] * 0.05) + (item['DBs'] * 5)
+        total_hrs += hrs
+        cost = (item['Dist'] * 15) + (sockets * 30) + (lights * 60) + (item['DBs'] * 1500)
+        total_cost += cost
+
+        report.append({
+            "Zone": item['Name'], "Type": item['Type'], "Load (kW)": round(total_kw, 1),
+            "Sockets": sockets, "Lights": lights, "Cable": ref[5], 
+            "V-Drop %": round(vd_pct, 2), "Status": "✅ Pass" if vd_pct <= 4 else "⚠️ Resize"
+        })
+
+    df = pd.DataFrame(report)
+    st.subheader("📋 Provisioning & Technical Report")
+    st.table(df)
+
+    # --- 4. PROJECT MANAGEMENT & T&C ---
+    st.divider()
+    days = math.ceil(total_hrs / (manpower * 8))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Max Demand", f"{total_md:.1f} kW")
+    c2.metric("Project Cost", f"${total_cost:,.2f}")
+    c3.metric("Duration", f"{days} Working Days")
+
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.subheader("🚧 Phase Breakdown")
+        st.info(f"**First Fix**: {math.ceil(days*0.4)}d | **Second Fix**: {math.ceil(days*0.4)}d | **T&C**: {math.ceil(days*0.2)}d")
+        if any(d['Type'] == "Residential" for d in st.session_state.project):
+            st.write("**Residential Provisioning (Based on Load Sheet):**")
+            for app in RES_APPLIANCES: st.write(f"- {app}")
+    
+    with col_right:
+        st.subheader("🔍 Testing & Commissioning Checklist")
+        st.checkbox("Visual Inspection (Cabling & Terminations)")
+        st.checkbox("Continuity of Protective Conductors")
+        st.checkbox("Insulation Resistance Test (>1 MΩ)")
+        st.checkbox("Polarity Test")
+        st.checkbox("Earth Fault Loop Impedance (EFLI)")
+        st.checkbox("RCD Operation Test")
+
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Export Project Schedule (CSV)", data=csv, file_name="electrical_master_plan.csv")
+    
+    if st.button("🗑️ Reset All"):
+        st.session_state.project = []
+        st.rerun()
